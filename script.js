@@ -426,7 +426,7 @@ var SFX={
   power:function(){tone(440,'square',0.08,0.1);tone(660,'square',0.08,0.1,1,0.08);tone(880,'square',0.15,0.1,1,0.16);},
   slash:function(){tone(1600,'square',0.05,0.1,0.45);tone(720,'square',0.09,0.08,0.4,0.04);},
   dead:function(){noise(0.6,0.5);tone(400,'sawtooth',0.6,0.25,0.1);},
-  warn:function(){tone(220,'sawtooth',0.25,0.12,1.5);tone(220,'sawtooth',0.25,0.12,1.5,0.35);}
+  warn:function(){tone(220,'sawtooth',0.25,0.24,1.5);tone(220,'sawtooth',0.25,0.24,1.5,0.35);}
 };
 var introT=0,musicMode=null;
 function zoneEven(){return (stage%2)===0;}
@@ -681,7 +681,7 @@ function bossDraw(b){
   cx.fillStyle=b.flash?'#fff':(exposed?'#f00':'#00f');cx.beginPath();cx.arc(0,0,b.r,0,6.283);cx.fill();
   cx.fillStyle=exposed?(pulse>0.5?'#ff0':'#f00'):(pulse>0.5?'#0ff':'#00f');cx.beginPath();cx.arc(0,0,13+pulse*3,0,6.283);cx.fill();
   cx.restore();
-  cx.fillStyle='#000';cx.fillRect(W/2-100,7,200,5);cx.fillStyle=exposed?'#f00':'#0ff';cx.fillRect(W/2-100,7,200*b.hp/b.max,5);
+  cx.fillStyle='#000';cx.fillRect(W/2-100,7,200,5);cx.fillStyle=exposed?'#fff':'#0ff';cx.fillRect(W/2-100,7,200*b.hp/b.max,5);
 }
 function stageClear(){
   stage++;saveHI();say(zoneName());waveT=0;scheduleWaves();
