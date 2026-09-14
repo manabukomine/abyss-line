@@ -831,7 +831,7 @@ function dropPickup(x,y){
 // ---------- update ----------
 function update(){
   time++;
-  if(state!=='play'){if(state==='over')deadT++;scroll+=0.7;parts.forEach(pUpd);return;}
+  if(state!=='play'){if(state==='over')deadT++;scroll+=0.7;parts.forEach(pUpd);if(shake>0)shake--;if(flash>0)flash--;if(shieldFlash>0)shieldFlash--;if(msgT>0)msgT--;return;}
   if(introT>0){introT--;playerUpdate();bullets.length=0;scroll+=2;if(msgT>0)msgT--;if(introT===0){invul=120;say(zoneName());}bgmTick();return;}
   scroll+=2;
   if(spawnQ.length===0&&!boss&&enemies.length===0)scheduleWaves();
