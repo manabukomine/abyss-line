@@ -1,0 +1,32 @@
+ABYSS LINE / Project 87 v12 — BGM integration
+
+Baseline: game v11 + approved BGM driver v2. Both original files remain unchanged.
+The HTML includes all code; it needs no separate JS download or network assets.
+
+Music sequence:
+- Start touch/click/key unlocks a single shared AudioContext for music and SFX.
+- Opening plays its first two bars during a 172-tick (about 2.87s) launch sequence.
+  Player movement remains enabled; enemy waves wait until the launch ends.
+- Odd zones: TRENCH. Even zones: THERMAL. Stage music starts with the waves.
+- Stage track: 28 bars / 44.8s. Musical warning passage starts at 38.4s;
+  on-screen WARNING remains at wave tick 2500 (~41.67s).
+- Boss at wave tick 2680 (~44.67s): ARMOR track.
+- All arms destroyed: CORE track. Boss death: music stops for the explosions.
+- Next zone restarts its stage track; game over stops music.
+- Keyboard start now unlocks audio too. Touch sensitivity and game balance unchanged.
+- Hidden page pauses logic and suspends the shared AudioContext. Return resumes it.
+
+Integration safeguards:
+- Removed demo-page UI wiring from the embedded driver.
+- All scheduled music sources tracked so mode switches stop queued old notes too.
+- One music scheduler and one AudioContext. Music gain 0.24; SFX bus remains 0.35.
+- Music is OPN-inspired synthesis, not a chip-accurate YM2203/MSM5205 emulator.
+  Per-channel re-articulation uses a short fade, not a strict zero-overlap cutoff.
+
+Validation:
+- node --check; embedded HTML script equals the JS file.
+- Mock DOM/AudioContext: opening, both zones, boss armor/core/death, game over,
+  hidden-page suspend/resume, one AudioContext and one scheduler verified.
+- 30,000 gameplay updates with music scheduling passed, reaching zone 6.
+- No real iPhone/browser listening test performed here. Please check music/SFX
+  balance, return from background, and the CORE transition on the target device.
