@@ -482,7 +482,7 @@ window.addEventListener('mouseup',dragEnd);
 window.addEventListener('blur',function(){dragEnd();keys={};});
 
 // ---------- game state ----------
-var state='title',score=0,hiscore=0,lives=3,power=0,shield=0,stage=1,time=0,scroll=0;
+var state='title',score=0,hiscore=0,lives=3,power=0,shield=0,stage=1,time=0,scroll=0,powerUpCalloutsLeft=3;
 function loadHI(){try{var n=parseInt(localStorage.getItem('abyss87_hi'),10);if(n>0)hiscore=n;}catch(err){}}
 function saveHI(){try{if(score>hiscore)hiscore=score;localStorage.setItem('abyss87_hi',String(hiscore));}catch(err){}}
 loadHI();
@@ -501,7 +501,7 @@ function startFromInput(){
   if(state==='title'||(state==='over'&&deadT>60)){newGame();}
 }
 function newGame(){
-  score=0;lives=3;power=0;shield=0;stage=1;time=0;scroll=0;
+  score=0;lives=3;power=0;shield=0;stage=1;time=0;scroll=0;powerUpCalloutsLeft=3;
   resetField();state='play';introT=172;musicMode=null;bgmTick();
   say('LAUNCH');
 }
@@ -877,7 +877,7 @@ function update(){
     var ddx=s.x-player.x,ddy=s.y-player.y;if(ddx*ddx+ddy*ddy<(s.r+player.r-3)*(s.r+player.r-3)){ebullets.splice(i,1);playerHit();break;}
   }
   for(i=pickups.length-1;i>=0;i--){var pk=pickups[i];pk.t++;pk.x-=1.5;pk.y+=Math.sin(pk.t*0.08)*0.8;
-    if(Math.abs(pk.x-player.x)<13&&Math.abs(pk.y-player.y)<13){if(pk.kind==='P'){if(power<5)power++;else score+=500;}else if(pk.kind==='S'){shield=Math.min(3,shield+1);shieldFlash=8;}else addBoomerang();SFX.power();pickups.splice(i,1);continue;}
+    if(Math.abs(pk.x-player.x)<13&&Math.abs(pk.y-player.y)<13){if(pk.kind==='P'){if(power<5){power++;if(powerUpCalloutsLeft>0){powerUpCalloutsLeft--;say('POWER UP');}}else score+=500;}else if(pk.kind==='S'){shield=Math.min(3,shield+1);shieldFlash=8;}else addBoomerang();SFX.power();pickups.splice(i,1);continue;}
     if(pk.x<-30)pickups.splice(i,1);
   }
   parts.forEach(pUpd);for(i=parts.length-1;i>=0;i--)if(parts[i].life<=0)parts.splice(i,1);
