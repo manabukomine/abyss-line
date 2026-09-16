@@ -927,7 +927,7 @@ function draw(){
     if(b.lance){cx.fillStyle='#00f';cx.fillRect(bx-24,by-1,18,2);cx.fillStyle='#0ff';cx.fillRect(bx-16,by-2,34,4);cx.fillStyle='#fff';cx.fillRect(bx-6,by-1,28,2);if(time&1){cx.fillRect(bx+20,by-2,4,4);cx.fillStyle='#0ff';cx.fillRect(bx-28,by,10,1);}}
     else{cx.fillStyle='#0ff';cx.fillRect(bx-6,by-1,12,2);if(power>=3){cx.fillStyle='#fff';cx.fillRect(bx+5,by,3,1);}}
   }
-  for(i=0;i<ebullets.length;i++){var s=ebullets[i];cx.fillStyle=s.kind===1?'#f00':(s.kind===2?'#fff':'#ff0');cx.fillRect(Math.round(s.x)-2,Math.round(s.y)-2,4,4);cx.fillStyle='#fff';cx.fillRect(Math.round(s.x),Math.round(s.y),1,1);}
+  for(i=0;i<ebullets.length;i++){var s=ebullets[i],sx=Math.round(s.x),sy=Math.round(s.y);cx.fillStyle='#000';cx.fillRect(sx-3,sy-3,6,6);cx.fillStyle=s.kind===1?'#f00':(s.kind===2?'#fff':'#ff0');cx.fillRect(sx-2,sy-2,4,4);cx.fillStyle='#fff';cx.fillRect(sx,sy,1,1);}
   for(i=0;i<parts.length;i++){var p=parts[i];var lf=p.life/p.max;if(lf<0.35&&((time+i)&1))continue;cx.fillStyle=lf>0.6?p.col:(lf>0.35?'#f00':'#00f');cx.fillRect(Math.round(p.x)-1,Math.round(p.y)-1,2,2);}
   if(state==='play')drawBoomerangs();
   if(state==='play')playerDraw();
