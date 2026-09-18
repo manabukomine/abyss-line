@@ -539,9 +539,10 @@ function scheduleZone1(Q,d){
   var i;
   for(i=0;i<6;i++)(function(i){Q(120+i*14,function(){spawnEnemy('drone',W+30,58,{path:'sine',ph:i*0.5,sp:3.2*d,by:58,amp:30});});})(i);
   for(i=0;i<6;i++)(function(i){Q(420+i*14,function(){spawnEnemy('drone',W+30,142,{path:'sine',ph:i*0.5,sp:3.2*d,by:142,amp:30});});})(i);
-  Q(700,function(){spawnEnemy('turret',W+30,H-22,{path:'ground'});});
-  Q(800,function(){spawnEnemy('turret',W+30,22,{path:'ceil'});});
-  for(i=0;i<4;i++)(function(i){Q(760+i*40,function(){spawnEnemy('ray',W+30,rnd(34,H-34),{path:'dash',sp:2*d});});})(i);
+  // TRENCH "avoid" beat: let the lanes clear (silence), then ground+ceil turret spawn on the
+  // SAME tick so their 3-way volleys land together — a top/bottom pincer, not more bullets.
+  Q(800,function(){spawnEnemy('turret',W+30,H-22,{path:'ground'});spawnEnemy('turret',W+30,22,{path:'ceil'});});
+  for(i=0;i<4;i++)(function(i){Q(960+i*40,function(){spawnEnemy('ray',W+30,rnd(34,H-34),{path:'dash',sp:2*d});});})(i);
   var wallGap=(Math.floor((stage-1)/2)%2)?4:1;
   for(i=0;i<7;i++)(function(i){if(i!==wallGap&&i!==wallGap+1)Q(1100+i*3,function(){spawnEnemy('mine',W+30,25+i*25,{path:'drift',sp:1.6*d,wall:true});});})(i);
   for(i=0;i<8;i++)(function(i){Q(1400+i*12,function(){spawnEnemy('drone',W+30,H/2,{path:'vee',ph:i,sp:3.6*d});});})(i);
@@ -563,13 +564,23 @@ function scheduleZone2(Q,d){
       spawnEnemy('drone',W+30,148,{path:'sine',ph:i+2.4,sp:3.4*d,by:148,amp:12});
     });
   })(i);
-  // crossing pair: top sinks, bottom rises
-  for(i=0;i<6;i++)(function(i){
+  // THERMAL "avoid" beat: 3 of the 6 crossing pairs keep their original early ticks (tell),
+  // then a silence, then the other 3 converge on ONE tick — top+bottom, diagonal, all firing
+  // together — instead of trickling in one at a time. Same 6 pairs as before, just regrouped,
+  // and timed to resolve before the pincer turrets below so the two beats don't stack.
+  for(i=0;i<3;i++)(function(i){
     Q(340+i*22,function(){
       spawnEnemy('drone',W+24,18,{path:'cross',sp:2.8*d,by:18,dir:1,amp:150});
       spawnEnemy('drone',W+24,H-18,{path:'cross',sp:2.8*d,by:H-18,dir:-1,amp:150});
     });
   })(i);
+  Q(500,function(){
+    var xo;
+    for(xo=0;xo<3;xo++){
+      spawnEnemy('drone',W+24+xo*16,18,{path:'cross',sp:2.8*d,by:18,dir:1,amp:150});
+      spawnEnemy('drone',W+24+xo*16,H-18,{path:'cross',sp:2.8*d,by:H-18,dir:-1,amp:150});
+    }
+  });
   // pincer turrets at the same beat + free 4-way mines
   Q(520,function(){spawnEnemy('turret',W+30,H-22,{path:'ground'});spawnEnemy('turret',W+30,22,{path:'ceil'});});
   for(i=0;i<3;i++)(function(i){Q(560+i*50,function(){spawnEnemy('mine',W+30,rnd(50,H-50),{path:'drift',sp:1.8*d});});})(i);
@@ -821,11 +832,15 @@ function playerHit(){
 }
 
 // ---------- pickups ----------
+// B-1: on stage 1, before the player has ever picked up a Boomerang Slugger, widen B's
+// share of the drop table (0.25-0.32 -> 0.25-0.40) so a first-time player is very likely to
+// see one during the opening wave alone, without touching P/S odds or guaranteeing a drop.
+// Reverts to the normal table the moment boomerangs.length>=1 — no extra counter/state.
 function dropPickup(x,y){
-  var r=Math.random();
+  var r=Math.random(),bMax=(stage===1&&boomerangs.length===0)?0.40:0.32;
   if(r<0.18)pickups.push({x:x,y:y,kind:'P',t:0});
   else if(r<0.25)pickups.push({x:x,y:y,kind:'S',t:0});
-  else if(r<0.32)pickups.push({x:x,y:y,kind:'B',t:0});
+  else if(r<bMax)pickups.push({x:x,y:y,kind:'B',t:0});
 }
 
 // ---------- update ----------
