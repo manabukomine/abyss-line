@@ -16,13 +16,14 @@
 ## 特徴
 
 - 横長画面のダライアスオマージュ。奇数ゾーン TRENCH、偶数ゾーン THERMAL
-- OPN 風の FM 音源ドライバで BGM を合成（YM2203×2 + MSM5205 構成を意識）
+- OPN 風の FM 音源ドライバで BGM を合成（YM2203×2 + MSM5205 構成を意識）。全5曲：LAUNCH / HADAL ZONE / BLACK SMOKER / IRON LEVIATHAN / ABYSSAL HEART
 - ES5・外部ライブラリなし・Web Audio。HTML 1 ファイルで完結
 
 ## ファイル
 
-- `index.html` — 公開版（v12）
-- `baseline_v12/` — v12 の元ファイルと開発メモ
+- `index.html` — 公開版（combined v4）
+- `combined_v4/` — combined v4 の元ファイル
+- `baseline_v12/` — 旧版 v12 の元ファイルと開発メモ
 
 ## 作者
 
