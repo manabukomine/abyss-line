@@ -1,14 +1,10 @@
-// ABYSS LINE / Project 87 v12 — OPN integration
-// ABYSS LINE / Project 87 BGM Driver v2
+
+// ABYSS LINE / Project 87 combined v4 — combined_v3_proto ＋ BGM v4（全5曲）
+// BGM v4：YM2203×2（FM6+SSG6）+ MSM5205（リズム1ch）相当、各チャンネル同時1音。作曲：Claude。
+//   stage(TRENCH)=HADAL ZONE / thermal=BLACK SMOKER / boss=IRON LEVIATHAN / bossCore=ABYSSAL HEART / opening=LAUNCH
+//   鳴るのは SONGS の5曲と scheduleSong() だけ。旧STAGE曲・旧エンジンは削除済み（v3_proto 参照）。
 (function(){
 'use strict';
-// ============================================================
-//  OPN-STYLE SOUND DRIVER  v4  Project 87 timing edition
-//  （YM2203×2 + MSM5205×1 = FM6 + SSG6 + ADPCM(リズム)1ch）
-//  実機のダライアス(1986)がまさにこの構成。Chip Aは従来のFM1-3/SSG1-3、
-//  Chip Bはそれを補強するダブリング・パッド・オフビートベース・追加の飾り。
-//  各チャンネルは実機と同じく同時に1音だけ、という規律は崩していない。
-// ============================================================
 var AC=null,master=null,comp=null,outFilter=null,running=false,timer=null;
 var mute={fm:false,ssg:false,rhy:false,fmB:false,ssgB:false},mode='stage';
 var FM_VOICES={},SSG_VOICES={},RHY_VOICE=null,liveSources=new Set();
@@ -21,27 +17,50 @@ function initAudio(existingAC,destination){
   AC=existingAC||new A();
   master=AC.createGain();master.gain.value=0.32;
   comp=AC.createDynamicsCompressor();comp.threshold.value=-14;comp.ratio.value=4;comp.attack.value=0.003;comp.release.value=0.15;
-  // 出力段のローパス：実機は最終的にアナログアンプ/スピーカーを通っていたので、
-  // 矩形波の角が完全に立ったまま耳に届くことはなかった。その"最後の一段"を足す。
-  outFilter=AC.createBiquadFilter();outFilter.type='lowpass';outFilter.frequency.value=7500;outFilter.Q.value=0.7;
+  // 出力段ローパス8500Hz：実機のアナログ出力段の代わり。金属感の上の帯域は残す
+  outFilter=AC.createBiquadFilter();outFilter.type='lowpass';outFilter.frequency.value=8500;outFilter.Q.value=0.7;
   master.connect(comp);comp.connect(outFilter);outFilter.connect(destination||AC.destination);
   var n=AC.sampleRate*0.6,b=AC.createBuffer(1,n,AC.sampleRate),d=b.getChannelData(0),i;
   for(i=0;i<n;i++)d[i]=Math.random()*2-1;
   noiseBuf=b;
 }
-function hz(note){return 13.75*Math.pow(2,(note-9)/12);} // note = MIDI note number
+function hz(note){return 13.75*Math.pow(2,(note-9)/12);}
 
-// ---------- FM: 3 named voices, 2-operator (modulator -> carrier freq) ----------
+// ============================================================
+//  FM音色：オペレータ自己フィードバック（実機OPNのFBレジスタ相当）
+//  実機と同じ式 y[n]=sin(φ+β·(y[n-1]+y[n-2])/2) を1周期ぶん計算して
+//  PeriodicWave化し、モジュレータの波形そのものにする。β↑でサイン→ノコギリ寄りになり、
+//  キャリアに乗る倍音が増える＝金属的なエッジ。β≦2の範囲は周期が安定することを確認済み。
+// ============================================================
+var FB_CACHE={};
+function fbWave(beta){
+  var key=beta.toFixed(2);if(FB_CACHE[key])return FB_CACHE[key];
+  var N=256,H=48,buf=new Float32Array(N),o1=0,o2=0,c,n,h,k,y;
+  for(c=0;c<12;c++)for(n=0;n<N;n++){y=Math.sin(2*Math.PI*n/N+beta*(o1+o2)/2);o2=o1;o1=y;buf[n]=y;}
+  var re=new Float32Array(H+1),im=new Float32Array(H+1);
+  for(h=1;h<=H;h++){var a=0,b=0;for(k=0;k<N;k++){a+=buf[k]*Math.cos(2*Math.PI*h*k/N);b+=buf[k]*Math.sin(2*Math.PI*h*k/N);}re[h]=2*a/N;im[h]=2*b/N;}
+  var w;try{w=AC.createPeriodicWave(re,im,{disableNormalization:true});}catch(e){w=AC.createPeriodicWave(re,im);}
+  FB_CACHE[key]=w;return w;
+}
 var FM_PATCH={
-  lead:  {ratio:3.5, idx0:0.9,  idx1:0.32, att:0.006, dec:0.16, vol:0.24}, // idx1を0.15→0.32：サステインで痩せない
-  counter:{ratio:2.0, idx0:1.1, idx1:0.2,  att:0.004, dec:0.22, vol:0.14},
-  bass:  {ratio:1.0, idx0:2.5,  idx1:0.5,  att:0.004, dec:0.20, vol:0.30},
-  // サビ専用・古代祐三氏スタイル：モジュレータの自己フィードバックで倍音にラフさを持たせ、
-  // 速めのビブラートを乗せる音色。※現在サビでは未使用（学さんの指示で'lead'に統一）。予備として残す。
-  koshiro:{ratio:2.0, idx0:2.6, idx1:0.55, att:0.004,dec:0.05, sus:0.68, rel:0.10, vol:0.26,
-            fb:0.32, vib:true, vibRate:6.4, vibDepth:0.011},
-  // Chip B・FM5用：小節の頭で一度だけ鳴らす持続パッド。地味だが土台を厚くする。
-  pad:   {ratio:1.0, idx0:0.6, idx1:0.25, att:0.06, dec:0.15, sus:0.55, rel:0.25, vol:0.10}
+  // Lead（IRON LEVIATHAN）：金属的なベル系。FB1.5でモジュレータがほぼノコギリ波
+  lead:  {ratio:3.5, idx0:1.3,  idx1:0.45, att:0.004, dec:0.16, vol:0.22, fb:1.5},
+  // Counter：アルペジオ用。FB0.6でリードとぶつからない程度の「ざらつき」
+  counter:{ratio:2.0, idx0:1.2, idx1:0.22, att:0.004, dec:0.20, vol:0.13, fb:0.6},
+  // Bass：減衰を短くしてピッキング感を立てる
+  bass:  {ratio:1.0, idx0:3.0,  idx1:0.7,  att:0.003, dec:0.14, vol:0.30, fb:1.0},
+  // ---- v4 の曲用 ----
+  // 歌うリード：整数比(ratio1)で音程感を出し、FB1.4で金属的な芯。長い音だけ0.18秒遅れてビブラートがかかる
+  hlead: {ratio:1.0, idx0:2.4, idx1:1.2, att:0.005, dec:0.10, sus:0.78, rel:0.06, vol:0.20,
+          fb:1.4, vib:true, vibRate:5.8, vibDepth:0.012, vibDelay:0.18},
+  harm:  {ratio:1.0, idx0:1.6, idx1:0.8, att:0.006, dec:0.10, sus:0.70, rel:0.06, vol:0.11,
+          fb:1.0, vib:true, vibRate:5.8, vibDepth:0.010, vibDelay:0.2},
+  brass: {ratio:1.0, idx0:3.2, idx1:1.0, att:0.012, dec:0.10, sus:0.45, rel:0.08, vol:0.13, fb:1.2},
+  // ディストーション・ギター風：FB最大近く＋高い変調度、減衰を極端に短くしてブリッジミュートの刻みに
+  gtr:   {ratio:1.0, idx0:4.0, idx1:1.6, att:0.002, dec:0.05, vol:0.10, fb:1.9},
+  // THERMAL/CORE 用リード：モジュレータ2倍で鼻にかかった明るい音、FBも強め。HADALより「熱い」
+  tlead: {ratio:2.0, idx0:2.0, idx1:1.0, att:0.004, dec:0.10, sus:0.75, rel:0.06, vol:0.19,
+          fb:1.6, vib:true, vibRate:6.2, vibDepth:0.012, vibDelay:0.16}
 };
 function keyOffVoice(v,t){
   if(!v)return;var i,p;
@@ -53,27 +72,25 @@ function playFM(ch,patchName,note,t,dur,detuneCents,velMul){
   keyOffVoice(FM_VOICES[ch],t);
   var p=FM_PATCH[patchName],f=hz(note),vmul=velMul||1;
   var car=AC.createOscillator(),mod=AC.createOscillator(),mg=AC.createGain(),cg=AC.createGain();
-  car.type='sine';mod.type='sine';
+  car.type='sine';
+  if(p.fb)mod.setPeriodicWave(fbWave(p.fb));else mod.type='sine';
   car.frequency.setValueAtTime(f,t);
   if(detuneCents)car.detune.value=detuneCents;
   mod.frequency.setValueAtTime(f*p.ratio,t);
   mod.connect(mg);mg.connect(car.frequency);car.connect(cg);cg.connect(master);
   var extraNodes=[],voiceSources=[mod,car];
-  if(p.fb){
-    // モジュレータの自己フィードバック：出力を自分のfrequencyへ戻し、倍音にラフさを足す
-    var fbGain=AC.createGain();fbGain.gain.setValueAtTime(f*p.fb,t);
-    mod.connect(fbGain);fbGain.connect(mod.frequency);extraNodes.push(fbGain);
-  }
   if(p.vib){
     var lfo=AC.createOscillator(),lfoGain=AC.createGain();
     lfo.frequency.setValueAtTime(p.vibRate,t);
-    lfoGain.gain.setValueAtTime(f*p.vibDepth,t);
+    if(p.vibDelay){ // ディレイド・ビブラート：発音直後は真っ直ぐ、少し後から揺れ始める
+      lfoGain.gain.setValueAtTime(0,t);lfoGain.gain.setValueAtTime(0,t+p.vibDelay);
+      lfoGain.gain.linearRampToValueAtTime(f*p.vibDepth,t+p.vibDelay+0.2);
+    } else lfoGain.gain.setValueAtTime(f*p.vibDepth,t);
     lfo.connect(lfoGain);lfoGain.connect(car.frequency);
     extraNodes.push(lfo,lfoGain);voiceSources.push(lfo);
   }
   var stopAt;
   if(p.sus!==undefined){
-    // ADSR：アタック→サステインレベルまで減衰→書いた長さぶん保持→リリース。
     var holdAt=Math.max(t+p.att+p.dec,t+dur);
     mg.gain.setValueAtTime(f*p.idx0,t);
     mg.gain.exponentialRampToValueAtTime(Math.max(1,f*p.idx1),t+p.att+p.dec);
@@ -86,7 +103,6 @@ function playFM(ch,patchName,note,t,dur,detuneCents,velMul){
     cg.gain.exponentialRampToValueAtTime(0.0004,holdAt+p.rel);
     stopAt=holdAt+p.rel+0.02;
   } else {
-    // 従来通りのAD（弾いて減衰）：lead / counter / bass はここを通る。
     mg.gain.setValueAtTime(f*p.idx0,t);
     mg.gain.exponentialRampToValueAtTime(Math.max(1,f*p.idx1),t+dur);
     cg.gain.setValueAtTime(0.0008,t);
@@ -98,8 +114,6 @@ function playFM(ch,patchName,note,t,dur,detuneCents,velMul){
   var k;for(k=0;k<extraNodes.length;k++){if(extraNodes[k].start)extraNodes[k].start(t);if(extraNodes[k].stop)extraNodes[k].stop(stopAt);}
   FM_VOICES[ch]={gains:[cg],sources:voiceSources};
 }
-
-// ---------- SSG (PSG): 3 generic square-wave voices ----------
 function playSSG(ch,note,t,dur,vol,detuneCents){
   keyOffVoice(SSG_VOICES[ch],t);
   var o=AC.createOscillator(),g=AC.createGain();
@@ -112,246 +126,334 @@ function playSSG(ch,note,t,dur,vol,detuneCents){
   SSG_VOICES[ch]={gains:[g],sources:[o]};
 }
 
-// ---------- rhythm: 1 channel worth of BD/SD/HH (MSM5205相当) ----------
+// ============================================================
+//  リズム音源（MSM5205相当・1ch）
+//  K=キック S=スネア s=ゴーストスネア H=クローズHH h=ゴーストHH O=オープンHH T=ハイタム t=ロータム
+//  1chなので次の打撃が前の音を必ず切る（実機ADPCMと同じ）。タムもサンプル再生の範囲内。
+// ============================================================
+function noiseHit(t,type,freq,q,vol,len){
+  var s=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();
+  s.buffer=noiseBuf;f.type=type;f.frequency.value=freq;if(q)f.Q.value=q;
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0006,t+len);
+  s.connect(f);f.connect(g);g.connect(master);trackSource(s);s.start(t);s.stop(t+len+0.02);
+  return {g:g,s:s};
+}
+function toneHit(t,wave,f0,f1,vol,len){
+  var o=AC.createOscillator(),g=AC.createGain();o.type=wave;
+  o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+len*0.8);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0008,t+len);
+  o.connect(g);g.connect(master);trackSource(o);o.start(t);o.stop(t+len+0.02);
+  return {g:g,o:o};
+}
 function drum(kind,t){
+  if(kind==='-')return;
   keyOffVoice(RHY_VOICE,t);
-  if(kind==='K'){
-    var o=AC.createOscillator(),g=AC.createGain();
-    o.frequency.setValueAtTime(150,t);o.frequency.exponentialRampToValueAtTime(32,t+0.1);
-    g.gain.setValueAtTime(0.55,t);g.gain.exponentialRampToValueAtTime(0.0008,t+0.14);
-    o.connect(g);g.connect(master);trackSource(o);o.start(t);o.stop(t+0.16);
-    RHY_VOICE={gains:[g],sources:[o]};
-  } else if(kind==='S'){
-    var s=AC.createBufferSource(),f=AC.createBiquadFilter(),g2=AC.createGain();
-    s.buffer=noiseBuf;f.type='bandpass';f.frequency.value=1800;f.Q.value=0.9;
-    g2.gain.setValueAtTime(0.4,t);g2.gain.exponentialRampToValueAtTime(0.0006,t+0.12);
-    s.connect(f);f.connect(g2);g2.connect(master);trackSource(s);s.start(t);s.stop(t+0.14);
-    var o2=AC.createOscillator(),g3=AC.createGain();o2.type='triangle';
-    o2.frequency.setValueAtTime(200,t);o2.frequency.exponentialRampToValueAtTime(110,t+0.05);
-    g3.gain.setValueAtTime(0.3,t);g3.gain.exponentialRampToValueAtTime(0.0006,t+0.07);
-    o2.connect(g3);g3.connect(master);trackSource(o2);o2.start(t);o2.stop(t+0.08);
-    RHY_VOICE={gains:[g2,g3],sources:[s,o2]};
-  } else if(kind==='H'){
-    var s2=AC.createBufferSource(),f2=AC.createBiquadFilter(),g4=AC.createGain();
-    s2.buffer=noiseBuf;f2.type='highpass';f2.frequency.value=7000;
-    g4.gain.setValueAtTime(0.16,t);g4.gain.exponentialRampToValueAtTime(0.0006,t+0.035);
-    s2.connect(f2);f2.connect(g4);g4.connect(master);trackSource(s2);s2.start(t);s2.stop(t+0.05);
-    RHY_VOICE={gains:[g4],sources:[s2]};
+  var a,b;
+  if(kind==='K'){a=toneHit(t,'sine',160,32,0.58,0.14);RHY_VOICE={gains:[a.g],sources:[a.o]};}
+  else if(kind==='S'||kind==='s'){
+    var v=kind==='S'?1:0.38;
+    a=noiseHit(t,'bandpass',1900,0.9,0.42*v,kind==='S'?0.12:0.05);
+    b=toneHit(t,'triangle',210,110,0.3*v,0.07);
+    RHY_VOICE={gains:[a.g,b.g],sources:[a.s,b.o]};
+  }
+  else if(kind==='H'){a=noiseHit(t,'highpass',7000,0,0.15,0.035);RHY_VOICE={gains:[a.g],sources:[a.s]};}
+  else if(kind==='h'){a=noiseHit(t,'highpass',8000,0,0.07,0.022);RHY_VOICE={gains:[a.g],sources:[a.s]};}
+  else if(kind==='O'){a=noiseHit(t,'highpass',6000,0,0.13,0.13);RHY_VOICE={gains:[a.g],sources:[a.s]};}
+  else if(kind==='T'){a=toneHit(t,'sine',260,120,0.42,0.12);RHY_VOICE={gains:[a.g],sources:[a.o]};}
+  else if(kind==='t'){a=toneHit(t,'sine',170,75,0.46,0.15);RHY_VOICE={gains:[a.g],sources:[a.o]};}
+  // C=キック＋クラッシュを1つのサンプルとして鳴らす（ADPCM 1chでも頭の一撃に厚みが出る）
+  else if(kind==='C'){a=toneHit(t,'sine',160,32,0.55,0.14);b=noiseHit(t,'highpass',5000,0,0.16,0.55);RHY_VOICE={gains:[a.g,b.g],sources:[a.o,b.s]};}
+}
+
+// ============================================================
+//  ベースライン：16ステップの記号パターン
+//  r=ベース音 o=+1oct 5=+5度 O=+1oct+5度 T=+2oct
+//  >=次の小節のベース音を16分早く食って伸ばす（次小節の頭は打たない）
+//  p=次の小節のベース音への半音アプローチ（上行なら下から、下行なら上から）
+//  p はジェミ子さんの「Bメロの経過音」のアイデアを全セクションに広げたもの
+// ============================================================
+var BASS_A =['r','-','o','-','r','o','-','r','-','o','r','-','o','r','5','o'];
+var BASS_B =['r','r','o','r','r','o','r','r','o','r','r','o','r','o','5','p'];
+var PUSH_B =['r','r','o','r','r','o','r','r','o','r','r','o','r','o','>','-'];
+var RUN_UP =['r','-','o','-','r','o','-','r','r','5','o','5','o','O','T','O'];
+var BASS_W =['r','r','o','r','r','o','r','r','o','r','r','o','r','o','T','o'];
+var RUN_W  =['r','r','o','r','r','o','r','r','o','5','o','O','T','O','T','p'];
+var BOSS_BASS=['r','r','o','r','r','o','r','r','o','r','r','o','r','o','T','o'];
+var BOSS_PUSH=['r','r','o','r','r','o','r','r','o','r','r','o','5','o','>','-'];
+var CORE_BASS=['r','-','r','o','r','-','o','r','-','r','o','r','5','o','T','p'];
+
+// ボス／コア用のリズム型
+var BOSS_RHY=['K','h','S','h','K','K','S','h','K','h','S','K','h','K','S','O'];
+var BOSS_RHY_F=['K','h','S','h','K','K','S','h','K','h','S','s','S','T','t','t'];
+var CORE_RHY=['K','h','S','K','K','h','S','h','K','K','S','h','K','S','K','S'];
+
+function bassBase(ch){return ch.b!==undefined?ch.b:ch.r-12;}
+function bassNoteOf(tok,ch,nx){
+  var b=bassBase(ch),nb=bassBase(nx);
+  if(tok==='r')return b;if(tok==='o')return b+12;if(tok==='5')return b+7;
+  if(tok==='O')return b+19;if(tok==='T')return b+24;if(tok==='>')return nb;
+  if(tok==='p')return nb>=b?nb-1:nb+1;
+  return null;
+}
+function chordTone(ch,i){return i<ch.t.length?ch.t[i]:12;} // 4音和音なら4番目は7th/9th、3音ならオクターブ
+var ARP_CYC=[0,1,2,3,2,1];
+
+// ============================================================
+//  SONG ENGINE — 全曲共通の編曲エンジン
+//  1曲 = 和音列＋リード譜＋小節ごとの役割（roles）＋ベース/ギター/リズムの小節パターン
+//  roles の文字：I=イントロ（リードの1oct下ユニゾン＋ブラス刻み）
+//                A=歌（8分アルペジオ、ブラスは小節頭の白玉）
+//                B=上昇（16分アルペジオ＋SSG高音ペダル）
+//                C=サビ（3度下ハモり＋SSGきらめき＋ブラスの裏打ち）
+//                K=溜め/WARNING（リード休み、ブラスとギターのキメだけ）
+//                R=リフ回帰（ユニゾン、エコー無し）
+//  チャンネル割り（YM2203×2 + MSM5205、各ch同時1音。SSG-B1〜3は使わない）
+//    FM-A1 リード  FM-A2 ユニゾン/アルペジオ/ハモり  FM-A3 ベース
+//    FM-B1 リードの付点8分遅れエコー  FM-B2 ブラス  FM-B3 ギター風の刻み
+//    SSG-A1 きらめき  SSG-A2 ベースの矩形波ダブリング  SSG-A3 高音ペダル
+// ============================================================
+function hc(r,t,b){return {r:r,t:t,b:b};}
+var NOTE_PC={C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+function parseLead(src){
+  var ev=[],bar,toks,i,m,pos,len;
+  for(bar=0;bar<src.length;bar++){
+    pos=bar*16;toks=src[bar].split(/\s+/);
+    for(i=0;i<toks.length;i++){
+      m=/^([A-Gr])(#|b)?(\d)?:(\d+)$/.exec(toks[i]);if(!m)continue;
+      len=parseInt(m[4],10);
+      if(m[1]!=='r')ev.push([pos,12*(parseInt(m[3],10)+1)+NOTE_PC[m[1]]+(m[2]==='#'?1:(m[2]==='b'?-1:0)),len]);
+      pos+=len;
+    }
+  }
+  return ev;
+}
+function bars(list){var out=[],i,k;for(i=0;i<list.length;i+=2)for(k=0;k<list[i];k++)out.push(list[i+1]);return out;}
+function makeSong(o){
+  o.len=o.chords.length*16;o.lead=parseLead(o.leadSrc);o.leadAt={};o.echoAt={};
+  var i,e;for(i=0;i<o.lead.length;i++){e=o.lead[i];o.leadAt[e[0]]=e;o.echoAt[(e[0]+3)%o.len]=e;}
+  return o;
+}
+// サビのハモり：リードの3〜9半音下にある、いちばん高い和音構成音（常に協和する）
+function harmonyBelow(note,ch){
+  var h,k,pc;
+  for(h=note-3;h>=note-9;h--){pc=((h%12)+12)%12;for(k=0;k<ch.t.length;k++)if((ch.r+ch.t[k])%12===pc)return h;}
+  return null;
+}
+
+// ---- 共通パターン（16分×16）----
+var HB_MG  =['o','r','r','o','r','r','o','r','r','o','r','r','o','r','o','r']; // 3-3-3-3-2-2
+var HB_MGP =['o','r','r','o','r','r','o','r','r','o','r','r','o','r','>','-'];
+var HB_HALF=['r','-','-','-','-','-','r','-','-','-','r','-','-','-','-','-'];
+var HB_END =['o','r','r','o','r','r','o','r','r','o','r','r','O','-','-','-'];
+var HG_I=['X','x','x','X','x','x','X','x','x','X','x','x','X','x','X','x'];
+var HG_A=['X','-','x','-','x','-','X','-','x','-','x','-','X','-','x','x'];
+var HG_B=['X','x','x','x','X','x','x','x','X','x','x','x','X','x','x','x'];
+var HG_H=['X','-','-','-','-','-','X','-','-','-','X','-','-','-','-','-'];
+var HG_END=['X','x','x','X','x','x','X','x','x','X','x','x','X','-','-','-'];
+var HR_I  =['K','h','H','K','S','h','K','h','K','h','H','K','S','h','S','s'];
+var HR_IF =['K','h','S','h','K','h','S','s','S','S','T','T','t','t','S','S'];
+var HR_A  =['K','h','H','h','S','h','H','K','h','h','K','h','S','h','s','O'];
+var HR_AF =['K','h','H','h','S','h','H','K','h','h','K','h','S','T','S','t'];
+var HR_B  =['K','h','K','h','S','h','H','K','h','K','H','h','S','h','K','s'];
+var HR_BF =['K','h','K','h','S','h','H','K','h','K','S','s','S','T','T','t'];
+var HR_ROLL=['S','s','S','s','S','s','S','s','S','S','S','S','S','S','S','S'];
+var HR_C  =['K','h','H','K','S','h','K','h','K','h','K','K','S','h','O','h'];
+var HR_CF =['K','h','H','K','S','h','K','h','S','s','S','S','T','T','t','t'];
+var HR_HALF=['K','-','-','-','-','-','K','-','S','-','-','-','-','-','K','-'];
+var HR_TOM=['T','T','T','T','t','t','t','t','S','S','S','S','S','S','S','S'];
+var TR_I  =['K','h','S','h','K','K','h','H','K','h','S','K','h','K','S','O'];
+var TR_C  =['K','h','S','K','K','h','S','h','K','K','S','h','K','h','S','O'];
+var OR_1  =['K','h','S','h','K','h','S','h','K','h','S','h','K','S','S','S'];
+var OR_END=['K','h','S','h','K','h','S','h','S','S','S','S','C','-','-','-'];
+
+// ============================================================
+//  1. HADAL ZONE — TRENCH（奇数ゾーン）  C minor / BPM152 / 32小節・50.5秒
+//     INTRO4 → A8 → B8 → サビ8 → WARNING4（溜め2＋リフ回帰2）
+// ============================================================
+var H_Cm=hc(60,[0,3,7,10],48),H_Ab=hc(68,[0,4,7,14],44),H_Abm7=hc(68,[0,4,7,11],44),H_Bb=hc(70,[0,4,7,14],46),
+    H_Fm=hc(65,[0,3,7,10],41),H_G=hc(67,[0,4,7,10],43),H_Gb9=hc(67,[0,4,7,13],43),
+    H_Gm=hc(67,[0,3,7,10],43),H_Eb=hc(63,[0,4,7,14],51);
+var SONG_HADAL=makeSong({
+  name:'HADAL ZONE',bpm:152,leadPatch:'hlead',echo:true,
+  roles:'IIIIAAAAAAAABBBBBBBBCCCCCCCCKKRR',
+  chords:[H_Cm,H_Cm,H_Ab,H_Bb, H_Cm,H_Ab,H_Fm,H_G, H_Cm,H_Ab,H_Bb,H_Gb9,
+          H_Fm,H_Gm,H_Abm7,H_Bb, H_Fm,H_Gm,H_Ab,H_G, H_Ab,H_Bb,H_Gm,H_Cm, H_Fm,H_Bb,H_Eb,H_G,
+          H_Ab,H_Bb,H_Cm,H_G],
+  leadSrc:[
+    'G4:2 C5:2 Eb5:2 G5:4 F5:2 Eb5:2 D5:2','Eb5:2 C5:2 G4:4 Bb4:2 C5:6',
+    'Ab4:2 C5:2 Eb5:2 Ab5:4 G5:2 F5:2 Eb5:2','Bb4:2 D5:2 F5:2 Bb5:2 Ab5:2 G5:2 F5:2 D5:2',
+    'G5:6 F5:2 Eb5:4 D5:2 Eb5:2','C5:6 Eb5:2 Ab5:6 G5:2','F5:8 Eb5:2 F5:2 G5:2 Ab5:2','G5:8 F5:2 D5:2 B4:2 D5:2',
+    'G5:6 F5:2 Eb5:4 D5:2 Eb5:2','C5:6 Eb5:2 Ab5:4 C6:4','Bb5:6 Ab5:2 G5:4 F5:2 D5:2','D5:4 F5:4 Ab5:4 G5:2 F5:2',
+    'C5:3 Ab4:3 C5:2 Eb5:3 C5:3 F5:2','D5:3 Bb4:3 D5:2 F5:3 D5:3 G5:2','Eb5:3 C5:3 Eb5:2 G5:3 Eb5:3 Ab5:2','F5:3 D5:3 F5:2 Bb5:4 Ab5:2 G5:2',
+    'Ab5:3 F5:3 Ab5:2 C6:3 Ab5:3 F5:2','Bb5:3 G5:3 Bb5:2 D6:3 Bb5:3 G5:2','C6:4 Bb5:4 Ab5:4 G5:4','G5:8 B4:1 C5:1 D5:1 Eb5:1 F5:1 G5:1 Ab5:1 B5:1',
+    'C6:6 Bb5:2 C6:4 Eb6:4','D6:8 C6:2 Bb5:2 F5:4','G5:6 Bb5:2 D6:4 C6:2 Bb5:2','C6:12 Bb5:2 C6:2',
+    'Ab5:6 G5:2 Ab5:4 C6:4','Bb5:6 Ab5:2 Bb5:4 D6:4','Eb6:8 D6:2 C6:2 Bb5:2 G5:2','B5:12 r:4',
+    'r:16','r:16','G4:2 C5:2 Eb5:2 G5:2 Bb5:2 G5:2 Eb5:2 C5:2','B4:2 D5:2 F5:2 Ab5:2 G5:8'],
+  bass:bars([3,HB_MG,1,HB_MGP, 7,BASS_A,1,RUN_UP, 3,BASS_B,1,PUSH_B,3,BASS_B,1,RUN_UP,
+             1,HB_MG,1,HB_MGP,1,HB_MG,1,HB_MGP,1,HB_MG,1,HB_MGP,1,HB_MG,1,RUN_UP, 2,HB_HALF,1,HB_MG,1,RUN_W]),
+  gtr:bars([4,HG_I, 8,HG_A, 8,HG_B, 8,HG_I, 2,HG_H,1,HG_I,1,HG_B]),
+  rhy:bars([3,HR_I,1,HR_IF, 7,HR_A,1,HR_AF, 3,HR_B,1,HR_BF,3,HR_B,1,HR_ROLL, 7,HR_C,1,HR_CF, 2,HR_HALF,1,HR_I,1,HR_TOM]),
+  crash:{0:1,4:1,12:1,20:1,22:1,24:1,26:1,30:1}
+});
+
+// ============================================================
+//  2. BLACK SMOKER — THERMAL（偶数ゾーン）  E minor（フリギアのF♮＋和声的短音階のD♯）/ BPM152 / 32小節
+//     HADALと同じ長さ・同じ構成にして、ボス出現の同期をゾーンに関係なく揃える。
+//     熱水噴出孔の「熱さ」は、主音Eのすぐ上のF（半音）と、16分音符で回り込むリフで出す。
+// ============================================================
+var T_Em=hc(64,[0,3,7],52),T_F=hc(65,[0,4,7,14],53),T_FE=hc(65,[0,4,7,11],52),T_G=hc(67,[0,4,7,14],43),
+    T_Am=hc(69,[0,3,7,10],45),T_B7=hc(71,[0,4,7,10],47),T_C=hc(72,[0,4,7,14],48),
+    T_D=hc(74,[0,4,7,14],50),T_Bm=hc(71,[0,3,7,10],47);
+var SONG_THERMAL=makeSong({
+  name:'BLACK SMOKER',bpm:152,leadPatch:'tlead',echo:true,
+  roles:'IIIIAAAAAAAABBBBBBBBCCCCCCCCKKRR',
+  chords:[T_Em,T_F,T_G,T_F, T_Em,T_F,T_Em,T_F,T_Am,T_G,T_F,T_B7,
+          T_C,T_D,T_Em,T_Em,T_C,T_D,T_B7,T_B7, T_C,T_D,T_Bm,T_Em,T_Am,T_D,T_G,T_B7,
+          T_Em,T_FE,T_Em,T_B7],
+  leadSrc:[
+    // INTRO：主音Eの周りを半音で回り込む16分のリフ
+    'E5:1 F5:1 E5:1 D#5:1 E5:2 B4:2 G4:1 A4:1 B4:2 E5:2 G5:2','F5:2 E5:1 F5:1 A5:2 C6:2 B5:1 A5:1 G5:2 F5:2 E5:2',
+    'G5:2 F#5:1 G5:1 B5:2 D6:2 C6:1 B5:1 A5:2 G5:2 F#5:2','A5:4 G5:2 F5:2 E5:2 F5:2 D#5:2 B4:2',
+    // A：Em→F（半音上）の揺れの上で歌う
+    'B5:6 A5:2 G5:4 F#5:2 G5:2','A5:8 G5:2 F5:2 E5:2 F5:2','G5:6 F#5:2 E5:4 B4:4','C5:6 B4:2 A4:4 C5:2 E5:2',
+    'E5:6 D5:2 C5:4 E5:2 A5:2','B5:6 A5:2 G5:4 D5:4','C6:6 B5:2 A5:4 F5:4','D#5:4 F#5:4 A5:4 B5:4',
+    // B：付点8分で C→D→Em と押し上げる
+    'E5:3 G5:3 C6:2 B5:3 G5:3 E5:2','F#5:3 A5:3 D6:2 E6:3 D6:3 A5:2','G5:3 B5:3 E6:2 D6:3 B5:3 G5:2','E6:4 D6:2 B5:2 G5:2 A5:2 B5:4',
+    'E5:3 G5:3 C6:2 B5:3 G5:3 E5:2','F#5:3 A5:3 D6:2 E6:3 D6:3 A5:2','D#6:4 B5:4 A5:4 F#5:4','B5:6 F#5:2 G5:1 A5:1 B5:1 C6:1 D6:1 D#6:1 r:2',
+    // サビ：D#からEへ飛び込む。頂点はbar27のG6
+    'E6:6 D6:2 C6:4 B5:2 C6:2','D6:8 A5:4 F#5:4','B5:6 A5:2 B5:4 D6:4','E6:12 D6:2 B5:2',
+    'C6:6 B5:2 A5:4 E6:4','D6:6 C6:2 A5:4 F#5:4','B5:4 D6:4 G6:8','F#6:4 D#6:4 B5:4 A5:4',
+    // WARNING：E音ペダル上で Em→F/E の軋み、リフ回帰でボスへ
+    'r:16','r:16','E5:1 F5:1 E5:1 D#5:1 E5:2 B4:2 G4:1 A4:1 B4:2 E5:2 G5:2','F#5:2 A5:2 B5:2 D#6:2 B5:8'],
+  bass:bars([4,BASS_W, 7,BASS_A,1,RUN_UP, 8,HB_MG,
+             1,BASS_B,1,PUSH_B,1,BASS_B,1,PUSH_B,1,BASS_B,1,PUSH_B,1,BASS_B,1,RUN_UP, 2,HB_HALF,1,BASS_W,1,RUN_W]),
+  gtr:bars([4,HG_B, 8,HG_A, 8,HG_I, 8,HG_B, 2,HG_H,1,HG_I,1,HG_B]),
+  rhy:bars([3,TR_I,1,HR_IF, 7,HR_B,1,HR_BF, 7,HR_I,1,HR_ROLL, 7,TR_C,1,HR_CF, 2,HR_HALF,1,TR_I,1,HR_TOM]),
+  crash:{0:1,4:1,12:1,20:1,22:1,24:1,26:1,30:1}
+});
+
+// ============================================================
+//  3. IRON LEVIATHAN — BOSS（ARMOR）  F minor / BPM166 / 16小節・約23秒
+//     前半8小節：同じ音を叩きつける機械的なスタッカート。ナポリの和音(Gb)で一瞬よろめかせる。
+//     後半8小節：Bbm→C→Db→Eb と1段ずつ上がり、最後は C7(♭9) の半音上行で頭へ戻る。
+//     リードは金属的なベル系（lead）。「装甲」の硬さ。
+// ============================================================
+var B_Fm=hc(65,[0,3,7,10],41),B_Db=hc(61,[0,4,7,14],49),B_C7=hc(60,[0,4,7,10],48),B_Gb=hc(66,[0,4,7,14],42),
+    B_Bbm=hc(70,[0,3,7,10],46),B_Eb7=hc(63,[0,4,7,10],51),B_C7b9=hc(60,[0,4,7,13],48);
+var SONG_BOSS=makeSong({
+  name:'IRON LEVIATHAN',bpm:166,leadPatch:'lead',echo:true,
+  roles:'BBBBBBBBCCCCCCCC',
+  chords:[B_Fm,B_Fm,B_Db,B_C7,B_Fm,B_Fm,B_Gb,B_C7, B_Bbm,B_C7,B_Db,B_Eb7,B_Bbm,B_C7,B_Db,B_C7b9],
+  leadSrc:[
+    'F5:2 r:2 F5:1 F5:1 Ab5:2 G5:2 F5:2 C5:2 Eb5:2','F5:2 r:2 F5:1 F5:1 Ab5:2 Bb5:2 C6:2 Bb5:2 Ab5:2',
+    'Ab5:6 F5:2 Db5:4 F5:4','E5:6 G5:2 C6:4 Bb5:4',
+    'F5:2 r:2 F5:1 F5:1 Ab5:2 G5:2 F5:2 C5:2 Eb5:2','F5:2 r:2 F5:1 F5:1 Ab5:2 Bb5:2 C6:2 Bb5:2 Ab5:2',
+    'Gb5:6 Bb5:2 Db6:4 C6:2 Bb5:2','C6:4 Bb5:4 G5:4 E5:4',
+    'Db6:6 C6:2 Bb5:4 F5:4','E5:6 F5:2 G5:4 C6:4','F5:6 Ab5:2 Db6:4 C6:2 Db6:2','Eb6:8 Db6:4 Bb5:4',
+    'Bb5:3 Db6:3 F6:2 Eb6:3 Db6:3 Bb5:2','C6:3 E6:3 G6:2 F6:3 E6:3 C6:2','F6:8 Eb6:4 Db6:4','C6:4 Db6:4 E6:4 G6:4'],
+  bass:bars([3,BOSS_BASS,1,BOSS_PUSH, 3,BOSS_BASS,1,BOSS_PUSH, 3,BOSS_BASS,1,BOSS_PUSH, 3,BOSS_BASS,1,RUN_W]),
+  gtr:bars([16,HG_B]),
+  rhy:bars([7,BOSS_RHY,1,BOSS_RHY_F, 7,BOSS_RHY,1,BOSS_RHY_F]),
+  crash:{0:1,8:1}
+});
+
+// ============================================================
+//  4. ABYSSAL HEART — CORE（最終形態）  F# minor / BPM174 / 8小節・約11秒
+//     BOSSのF短調から半音上へ。テンポも上げ、16分の駆け上がりで追い込む。
+// ============================================================
+var C_Fm=hc(66,[0,3,7,10],42),C_D=hc(62,[0,4,7,14],50),C_E7=hc(64,[0,4,7,10],52),C_Bm=hc(71,[0,3,7,10],47),
+    C_C7=hc(61,[0,4,7,10],49),C_C7b9=hc(61,[0,4,7,13],49);
+var SONG_CORE=makeSong({
+  name:'ABYSSAL HEART',bpm:174,leadPatch:'tlead',echo:true,
+  roles:'BBBBCCCC',
+  chords:[C_Fm,C_Fm,C_D,C_E7,C_Bm,C_C7,C_D,C_C7b9],
+  leadSrc:[
+    'F#5:1 G#5:1 A5:1 C#6:1 F#6:4 E6:2 C#6:2 A5:2 C#6:2','F#6:2 E6:2 C#6:2 A5:2 G#5:2 A5:2 C#6:4',
+    'D5:1 E5:1 F#5:1 A5:1 D6:4 C#6:2 A5:2 F#5:2 A5:2','E6:6 D6:2 B5:4 G#5:4',
+    'B5:1 C#6:1 D6:1 F#6:1 B5:4 D6:2 F#6:2 E6:2 D6:2','C#6:2 B5:2 G#5:2 F5:2 G#5:2 B5:2 C#6:4',
+    'F#6:6 E6:2 D6:4 A5:4','G#5:2 B5:2 D6:2 F6:2 E6:2 D6:2 C#6:4'],
+  bass:bars([7,CORE_BASS,1,RUN_W]),
+  gtr:bars([8,HG_B]),
+  rhy:bars([7,CORE_RHY,1,HR_CF]),
+  crash:{0:1,4:1}
+});
+
+// ============================================================
+//  5. LAUNCH — OPENING（発進）  BPM168 / 4小節・約5.71秒
+//     前半2小節：半分の速さのキメ（ブラスとギターの一撃）の上で、リードが4分音符でゆっくり上がる「溜め」。
+//     後半2小節：全パートが入ってファンファーレ。Ab→G で止めて、TRENCH の HADAL ZONE（C短調）へ解決させる。
+//     ゲーム側の発進演出 introT もこの長さ（343フレーム≒5.72秒）に合わせてある。
+// ============================================================
+var LR_BUILD=['K','-','-','-','-','-','K','-','S','-','-','-','S','s','S','S'];
+var SONG_OPENING=makeSong({
+  name:'LAUNCH',bpm:168,leadPatch:'hlead',echo:false,
+  roles:'KKII',
+  chords:[H_Cm,H_Bb,H_Ab,H_G],
+  leadSrc:['G4:4 C5:4 Eb5:4 G5:4','F5:6 G5:2 Ab5:4 Bb5:4',
+           'C5:2 C5:1 C5:1 Eb5:2 G5:2 Ab5:4 G5:2 F5:2','G5:2 Ab5:1 Bb5:1 B5:4 D6:8'],
+  bass:[HB_HALF,HB_HALF,HB_MG,HB_END],
+  gtr:[HG_H,HG_H,HG_I,HG_END],
+  rhy:[HR_HALF,LR_BUILD,OR_1,OR_END],
+  crash:{0:1,2:1}
+});
+
+var SONGS={stage:SONG_HADAL,thermal:SONG_THERMAL,boss:SONG_BOSS,bossCore:SONG_CORE,opening:SONG_OPENING};
+
+function scheduleSong(S,stepIdx,t){
+  var L=S.len,pos=((stepIdx%L)+L)%L,bar=pos>>4,w=pos&15,nb=S.chords.length;
+  var ch=S.chords[bar],nx=S.chords[(bar+1)%nb],prev=(bar+nb-1)%nb,role=S.roles.charAt(bar);
+  var e=S.leadAt[pos],len,gate;
+
+  // FM-A1 リード
+  if(!mute.fm&&e){len=e[2]*stepDur;gate=e[2]>=4?0.95:(e[2]>=2?0.82:0.7);
+    playFM('A1',S.leadPatch,e[1],t,len*gate,0,w===0?1.1:1);}
+  // FM-A2 ユニゾン／アルペジオ／ハモり
+  if(!mute.fm){
+    if(role==='I'||role==='R'){if(e)playFM('A2','harm',e[1]-12,t,e[2]*stepDur*0.8);}
+    else if(role==='C'){if(e&&e[2]>=2){var hn=harmonyBelow(e[1],ch);if(hn!==null)playFM('A2','harm',hn,t,e[2]*stepDur*0.9);}}
+    else if((role==='A'&&(w&1)===0)||role==='B'){var ai=ARP_CYC[(role==='B'?w:(w>>1))%ARP_CYC.length];playFM('A2','counter',ch.r+chordTone(ch,ai),t,stepDur*(role==='B'?0.8:1.4));}
+  }
+  // FM-A3 ベース（＋SSG-A2で矩形波ダブリング）
+  var bt=S.bass[bar][w];
+  if(w===0&&S.bass[prev][14]==='>')bt='-';
+  if(bt!=='-'){var bn=bassNoteOf(bt,ch,nx),bd=bt==='>'?stepDur*2.6:(bt==='O'&&S.bass[bar][w+1]==='-'?stepDur*3:stepDur*0.78);
+    if(!mute.fm)playFM('A3','bass',bn,t,bd);
+    if(!mute.ssg)playSSG('A2',bn,t,Math.min(bd,stepDur*0.6),0.042,0);}
+
+  // FM-B1 付点8分遅れのエコー
+  var ee=S.echoAt[pos];
+  if(!mute.fmB&&S.echo&&ee&&role!=='K'&&role!=='R')playFM('B1',S.leadPatch,ee[1],t,Math.min(ee[2],6)*stepDur*0.8,8,0.38);
+  // FM-B2 ブラス
+  if(!mute.fmB){
+    var hit=false,bl=stepDur*1.2;
+    if((role==='I'||role==='K')&&(w===0||w===6||w===10||(role==='I'&&w===12)))hit=true;
+    else if(role==='C'&&(w===0||w===10))hit=true;
+    else if(role==='A'&&w===0){hit=true;bl=stepDur*10;}
+    if(hit)playFM('B2','brass',ch.r+ch.t[1],t,bl);
+  }
+  // FM-B3 ギター風の刻み（x=ルート、X=5度上のパワーコード頭）
+  var gt=S.gtr[bar][w];
+  if(!mute.fmB&&gt!=='-'){var gb=bassBase(ch);playFM('B3','gtr',gt==='X'?gb+19:gb+12,t,gt==='X'?stepDur*0.9:stepDur*0.45);}
+
+  // SSG-A1 サビのきらめき／SSG-A3 上昇部の高音ペダル
+  if(!mute.ssg&&role==='C'&&(w&1)===1){var si=ARP_CYC[(w>>1)%ARP_CYC.length];playSSG('A1',ch.r+24+chordTone(ch,si),t,stepDur*0.4,0.026,+4);}
+  if(!mute.ssg&&role==='B'&&(w&3)===2)playSSG('A3',ch.r+24+7,t,stepDur*0.6,0.03,-4);
+
+  // RHYTHM（クラッシュ小節は頭をC、直後2つを空けて余韻を残す）
+  if(!mute.rhy){
+    var dk=S.rhy[bar][w];
+    if(S.crash[bar]){if(w===0)dk='C';else if(w<3)dk='-';}
+    drum(dk,t);
   }
 }
-
-// ============================================================
-//  作曲：STAGE THEME（Em、28小節：Aメロ8+Bメロ8+サビ8+WARNING4）
-// ============================================================
-var STAGE_CHORDS=[
-  {r:64,t:[0,3,7]},{r:69,t:[0,3,7]},{r:72,t:[0,4,7]},{r:71,t:[0,4,7]}, // Aメロ: Em Am C B
-  {r:64,t:[0,3,7]},{r:69,t:[0,3,7]},{r:74,t:[0,4,7]},{r:71,t:[0,4,7]}, // Em Am D B
-  {r:69,t:[0,3,7]},{r:69,t:[0,3,7]},{r:72,t:[0,4,7]},{r:72,t:[0,4,7]}, // Bメロ: Am Am C C（2小節ずつ持ち上げる）
-  {r:74,t:[0,4,7]},{r:74,t:[0,4,7]},{r:71,t:[0,4,7]},{r:71,t:[0,4,7]}, // D D B B
-  {r:72,t:[0,4,7]},{r:67,t:[0,4,7]},{r:69,t:[0,3,7]},{r:64,t:[0,3,7]}, // サビ: C G Am Em（一瞬の解放）
-  {r:72,t:[0,4,7]},{r:67,t:[0,4,7]},{r:74,t:[0,4,7]},{r:64,t:[0,3,7]}, // C G D Em（頂点→着地）
-  {r:64,t:[0,3,7]},{r:65,t:[0,4,7]},{r:62,t:[0,4,7]},{r:71,t:[0,4,7]}  // WARNING: Em F D B（ボス曲を予告）
-];
-var STAGE_LEAD=[
-  // bar1 (Em)
-  [2,76,2],[4,79,2],[6,81,2],[8,83,4],[12,81,2],[14,79,2],
-  // bar2 (Am) — 下降で答える
-  [16,81,2],[18,79,2],[20,76,2],[22,72,2],[24,74,4],[28,72,2],[30,69,2],
-  // bar3 (C) — 同じ形を3度上でシークエンス
-  [34,79,2],[36,83,2],[38,84,2],[40,86,4],[44,84,2],[46,83,2],
-  // bar4 (B) — 導音を含む緊張
-  [50,71,2],[52,75,2],[54,78,2],[56,83,4],[60,81,2],[62,78,2],
-  // bar5 (Em) — bar1再現
-  [66,76,2],[68,79,2],[70,81,2],[72,83,4],[76,81,2],[78,79,2],
-  // bar6 (Am) — bar2再現
-  [80,81,2],[82,79,2],[84,76,2],[86,72,2],[88,74,4],[92,72,2],[94,69,2],
-  // bar7 (D) — ブリッジ、伸ばす
-  [96,74,4],[100,78,4],[104,81,4],[108,79,4],
-  // bar8 (B) — ターンアラウンド、駆け上がってループ頭へ
-  [112,79,2],[114,78,2],[116,76,2],[118,75,2],[120,78,2],[122,81,2],[124,83,2],[126,87,2],
-  // ================= Bメロ（bar9〜16, steps128〜255）=================
-  // 同じ2音を叩きつけてから跳ね上がる、というモチーフをAm→C→D→Bと2小節ずつ持ち上げていく。
-  // 最後のB(bar15-16)で反復をやめて駆け上がり、サビの入り口(G5)へ落ちて着地する。
-  // bar9-10 (Am)
-  [128,76,2],[130,76,2],[132,81,2],[134,79,2],[136,76,2],[138,76,2],[140,81,2],[142,84,2],
-  [144,76,2],[146,76,2],[148,81,2],[150,79,2],[152,76,2],[154,76,2],[156,81,2],[158,84,2],
-  // bar11-12 (C) — 1段上へ
-  [160,79,2],[162,79,2],[164,84,2],[166,83,2],[168,79,2],[170,79,2],[172,84,2],[174,88,2],
-  [176,79,2],[178,79,2],[180,84,2],[182,83,2],[184,79,2],[186,79,2],[188,84,2],[190,88,2],
-  // bar13-14 (D) — さらに1段
-  [192,81,2],[194,81,2],[196,86,2],[198,85,2],[200,81,2],[202,81,2],[204,86,2],[206,90,2],
-  [208,81,2],[210,81,2],[212,86,2],[214,85,2],[216,81,2],[218,81,2],[220,86,2],[222,90,2],
-  // bar15-16 (B) — 反復をやめて駆け上がり、サビの入り口へ
-  [224,75,2],[226,78,2],[228,81,2],[230,83,2],[232,87,2],[234,90,2],[236,83,2],[238,78,2],
-  [240,71,2],[242,75,2],[244,78,2],[246,81,2],[248,83,2],[250,87,2],[252,90,2],[254,93,2],
-  // ================= サビ（bar17〜24, steps256〜383）=================
-  // ため息のように下降する形を繰り返し、bar20とbar24で一度立ち止まって呼吸する。
-  // bar23(D)で全曲の頂点(E6)に到達してから、静かに戻ってくる。
-  // 音色はAメロ・Bメロと同じ'lead'に統一（ブラス/古代祐三風の差し替えは撤回）。
-  // bar17 (C)
-  [258,79,6],[264,81,4],[268,79,4],
-  // bar18 (G) — 下降するため息のライン
-  [274,83,4],[278,81,2],[280,79,4],[284,74,4],
-  // bar19 (Am) — 一段高く駆け上がってから大きく落ちる
-  [290,84,4],[294,83,2],[296,81,4],[300,76,4],
-  // bar20 (Em) — 長く伸ばして呼吸する
-  [304,76,8],[316,71,4],
-  // bar21 (C) — bar17再現
-  [322,79,6],[328,81,4],[332,79,4],
-  // bar22 (G) — bar18再現
-  [338,83,4],[342,81,2],[344,79,4],[348,74,4],
-  // bar23 (D) — 全曲の頂点
-  [354,78,2],[356,81,2],[358,86,2],[360,88,6],[366,86,2],
-  // bar24 (Em) — 音階を降りて着地、次のループへ余白を残す
-  [368,83,2],[370,81,2],[372,79,2],[374,78,2],[376,76,4],
-  // ================= WARNING（bar25〜28, steps384〜447）=================
-  // E-Fの半音警報からDへ落下し、Bメジャーで止めてボス曲のEmへ解決させる。
-  [384,76,4],[390,77,2],[392,76,4],[398,71,2],
-  [400,77,4],[406,76,2],[408,77,4],[414,72,2],
-  [416,74,2],[420,78,2],[424,81,4],[430,78,2],
-  [432,71,2],[436,75,2],[440,78,2],[444,83,4]
-];
-var STAGE_LEN=448; // 28小節 = BPM150で44.8秒。ゲームのボス出現(約44.7秒)と同期
-// Bメロ専用の順次進行ベース（ルート/オクターブ跳躍ではなく、次の和音への経過音でつなぐ）。ジェミ子さん提案。
-var BMELO_BASS=[
-  [128,69,4],[136,71,4],       // bar9 (Am): A4 → B4（経過音）
-  [144,69,4],[152,72,4],       // bar10 (Am→Cへの経過): A4 → C5
-  [160,72,4],[168,74,4],       // bar11 (C): C5 → D5（経過音）
-  [176,72,4],[184,73,4],       // bar12 (C→Dへの経過): C5 → C#5（半音で滑らかに）
-  [192,74,4],[200,76,4],       // bar13 (D): D5 → E5（経過音）
-  [208,74,4],[216,73,4],       // bar14 (D→Bへの経過): D5 → C#5（半音で滑らかに）
-  [224,71,4],[232,75,4],       // bar15 (B): B4 → D#5（長3度、盛り上げ）
-  [240,71,4],[248,78,4]        // bar16 (Bキメへ向けて): B4 → F#5（一段高く、フィル/ブレイクへ）
-];
-
-// ============================================================
-//  作曲：BOSS THEME（4小節、E→F→D→Emのリフ）
-// ============================================================
-var BOSS_CHORDS=[{r:64,t:[0,3,7]},{r:65,t:[0,4,7]},{r:62,t:[0,4,7]},{r:64,t:[0,3,7]}];
-var BOSS_CORE_CHORDS=[{r:64,t:[0,3,7]},{r:72,t:[0,4,7]},{r:65,t:[0,4,7]},{r:71,t:[0,4,7]}];
-var BOSS_LEN=64;
-function bossRiffNote(step,root){
-  var cell=[[0,12,2],[2,12,2],[4,15,2],[6,12,2],[8,19,4],[12,15,2],[14,12,2]];
-  var i;for(i=0;i<cell.length;i++)if(cell[i][0]===step)return root+cell[i][1];
-  return null;
-}
-function bossCoreRiffNote(step,root){
-  var cell=[[0,12,2],[2,15,2],[4,19,2],[6,18,2],[8,24,2],[10,19,2],[12,18,2],[14,15,2]];
-  var i;for(i=0;i<cell.length;i++)if(cell[i][0]===step)return root+cell[i][1];
-  return null;
-}
-
-// ============================================================
-//  作曲：OPENING THEME（D major、8小節、完全新規オリジナル）
-//  「キャプテンネオ」そのものではなく、初期ZUNTATAのFMリードが持つ
-//  能天気で前向きな推進力・行進曲的なノリ、というスタイルだけを狙って新しく書いた。
-// ============================================================
-var OPENING_CHORDS=[
-  {r:62,t:[0,4,7]},{r:69,t:[0,4,7]},{r:71,t:[0,3,7]},{r:67,t:[0,4,7]}, // D A Bm G
-  {r:62,t:[0,4,7]},{r:69,t:[0,4,7]},{r:67,t:[0,4,7]},{r:69,t:[0,4,7]}  // D A G A（ターンアラウンド）
-];
-var OPENING_LEAD=[
-  [0,74,2],[2,78,2],[4,81,2],[6,86,4],[10,81,2],[12,78,2],[14,74,2],
-  [16,69,2],[18,73,2],[20,76,2],[22,81,4],[26,76,2],[28,73,2],[30,69,2],
-  [32,71,2],[34,74,2],[36,78,2],[38,83,4],[42,78,2],[44,74,2],[46,71,2],
-  [48,67,2],[50,71,2],[52,74,2],[54,79,4],[58,74,2],[60,71,2],[62,67,2],
-  [64,74,2],[66,78,2],[68,81,2],[70,86,4],[74,81,2],[76,78,2],[78,74,2],
-  [80,69,2],[82,73,2],[84,76,2],[86,81,4],[90,76,2],[92,73,2],[94,69,2],
-  [96,67,2],[98,71,2],[100,74,2],[102,79,2],[104,81,2],[106,79,2],[108,74,2],[110,71,2],
-  [112,76,2],[114,78,2],[116,79,2],[118,81,2],[120,83,2],[122,85,2],[124,86,2],[126,88,2]
-];
-var OPENING_LEN=128;
-var OPENING_BASS_T=['r','-','r','-','o','-','r','-','r','-','r','-','o','-','r','-'];
-var OPENING_RHY   =['K','H','S','H','K','H','S','H','K','H','S','H','K','H','S','H'];
-
-var ARP_CYC=[0,1,2,3,2,1]; // triad[0..2] + 3=oct
-var STAGE_BASS_T=['r','-','o','-','r','-','o','r','-','o','-','r','o','-','r','o'];
-var BOSS_BASS_T =['r','r','o','r','r','o','r','r','o','r','r','o','r','o','o','r'];
-var STAGE_RHY=['K','-','H','-','S','-','H','-','K','-','H','K','S','-','H','H'];
-var BOSS_RHY =['K','H','S','H','K','K','S','H','K','H','S','S','K','K','S','S'];
-var THERMAL_RHY=['K','H','S','H','K','K','H','H','K','H','S','K','K','H','S','H'];
-var CORE_RHY=['K','H','S','K','K','H','S','H','K','K','S','H','K','S','K','S'];
 
 var step=0,nextTime=0,stepDur=0;
-function setTempo(){stepDur=60/(mode==='opening'?168:(mode==='bossCore'?174:((mode==='boss')?166:150)))/4;} // 16分音符刻み
-
-function schedule(stepIdx,t){
-  var isCore=mode==='bossCore',isBoss=mode==='boss'||isCore,isOpen=mode==='opening',isThermal=mode==='thermal',isStage=mode==='stage'||isThermal;
-  var len=isBoss?BOSS_LEN:(isOpen?OPENING_LEN:STAGE_LEN);
-  var pos=((stepIdx%len)+len)%len;
-  var bar=Math.floor(pos/16),within=pos%16;
-  var chords=isCore?BOSS_CORE_CHORDS:(isBoss?BOSS_CHORDS:(isOpen?OPENING_CHORDS:STAGE_CHORDS)),ch=chords[bar%chords.length];
-  var leadSrc=isOpen?OPENING_LEAD:STAGE_LEAD,leadLen=isOpen?OPENING_LEN:STAGE_LEN;
-  var bassT=isBoss?BOSS_BASS_T:(isOpen?OPENING_BASS_T:STAGE_BASS_T);
-  var rhyT=isCore?CORE_RHY:(isBoss?BOSS_RHY:(isOpen?OPENING_RHY:(isThermal?THERMAL_RHY:STAGE_RHY)));
-  var inChorus=isStage&&bar>=16&&bar<24;
-  var inBmelo=isStage&&bar>=8&&bar<16;
-  var warningZone=isStage&&bar>=24;
-  // サビ入りのキメ演出：bar16終盤4stepでスネア連打のフィルイン、
-  // サビ頭2step(既存の休符と重なる)で伴奏を無音にするブレイク。
-  var fillZone=isStage&&pos>=252&&pos<=255;
-  var breakZone=isStage&&(pos===256||pos===257);
-
-  // FM1: lead（STAGE=作曲済みメロディ、BOSS=リフをその場で移調、OPENING=古代祐三風の音色で通し）
-  if(!mute.fm){
-    if(isBoss){var bn=(isCore?bossCoreRiffNote:bossRiffNote)(within,ch.r);if(bn!==null)playFM('A1','lead',bn,t,isCore?0.12:0.16);}
-    else{
-      var i;
-      for(i=0;i<leadSrc.length;i++){
-        if(leadSrc[i][0]!==pos)continue;
-        var noteLen=leadSrc[i][2]*stepDur;
-        if(isOpen) playFM('A1','koshiro',leadSrc[i][1],t,Math.max(0.04,noteLen-0.03));
-        else playFM('A1','lead',leadSrc[i][1],t,noteLen*(inChorus?0.75:(warningZone?0.52:0.42)),0,within===0?1.15:1);
-      }
-    }
-  }
-  // FM2: counter arp
-  if(!mute.fm&&!breakZone&&!fillZone&&(!inChorus||within%4===0)){var ai=ARP_CYC[within%ARP_CYC.length],an=ai===3?ch.r+24:ch.r+12+ch.t[ai];playFM('A2','counter',an,t,stepDur*(inChorus?1.6:0.85));}
-  // FM3: bass（Bメロだけは順次進行の専用ラインに差し替え）
-  if(!mute.fm&&!breakZone){
-    if(inBmelo){var bk;for(bk=0;bk<BMELO_BASS.length;bk++)if(BMELO_BASS[bk][0]===pos)playFM('A3','bass',BMELO_BASS[bk][1]-12,t,BMELO_BASS[bk][2]*stepDur*0.85);}
-    else{var bt=bassT[within];if(bt!=='-')playFM('A3','bass',bt==='r'?ch.r-12:ch.r,t,stepDur*0.8);}
-  }
-
-  // ============ Chip B（2基目のYM2203）============
-  var doubleLead=isOpen||isBoss||isThermal||inChorus||warningZone;
-  if(!mute.fmB&&doubleLead){
-    if(isBoss){var bn2=(isCore?bossCoreRiffNote:bossRiffNote)(within,ch.r);if(bn2!==null)playFM('B1','lead',bn2+12,t,isCore?0.10:0.14,9);}
-    else{
-      var i2;
-      for(i2=0;i2<leadSrc.length;i2++){
-        if(leadSrc[i2][0]!==pos)continue;
-        var noteLen2=leadSrc[i2][2]*stepDur;
-        if(isOpen) playFM('B1','koshiro',leadSrc[i2][1]+12,t,Math.max(0.04,noteLen2-0.03),9);
-        else playFM('B1','lead',leadSrc[i2][1]+12,t,noteLen2*(inChorus?0.75:(warningZone?0.52:0.42)),9,within===0?1.15:1);
-      }
-    }
-  }
-  if(!mute.fmB&&within===0&&!breakZone)playFM('B2','pad',ch.r,t,stepDur*12);
-  if(!mute.fmB&&!isBoss&&!fillZone&&!breakZone&&(isThermal||inChorus||warningZone)&&(within===6||within===14))playFM('B3','bass',ch.r-5,t,stepDur*0.7);
-
-  if(!mute.ssg&&!isBoss&&!breakZone&&!fillZone){var j;for(j=0;j<leadSrc.length;j++)if((leadSrc[j][0]+2)%leadLen===pos)playSSG('A1',leadSrc[j][1],t,Math.min(leadSrc[j][2],3)*stepDur*0.7,0.045,-6);}
-  if(!mute.ssg&&!breakZone&&!fillZone&&(within%4===2))playSSG('A2',ch.r+19,t,stepDur*0.5,0.05,+5);
-  if(!mute.ssg&&!inChorus&&!breakZone&&!fillZone&&(within%2===1)){var si=ARP_CYC[(within>>1)%ARP_CYC.length],sn=si===3?ch.r+36:ch.r+24+ch.t[si];playSSG('A3',sn,t,stepDur*0.35,0.032,0);}
-  if(!mute.ssgB&&!isBoss&&!inChorus&&!breakZone&&!fillZone&&(isOpen||isThermal)){var j2;for(j2=0;j2<leadSrc.length;j2++)if((leadSrc[j2][0]+4)%leadLen===pos)playSSG('B1',leadSrc[j2][1],t,Math.min(leadSrc[j2][2],2)*stepDur*0.6,0.03,-11);}
-  if(!mute.ssgB&&!breakZone){
-    if(inBmelo){var bk2;for(bk2=0;bk2<BMELO_BASS.length;bk2++)if(BMELO_BASS[bk2][0]===pos)playSSG('B2',BMELO_BASS[bk2][1]-12,t,BMELO_BASS[bk2][2]*stepDur*0.6,0.045,0);}
-    else{var bt2=bassT[within];if(bt2!=='-')playSSG('B2',bt2==='r'?ch.r-12:ch.r,t,stepDur*0.6,0.05,0);}
-  }
-  if(!mute.ssgB&&!inChorus&&!breakZone&&!fillZone&&(isOpen||isThermal||isBoss)&&(within%3===0)){var si2=ARP_CYC[(within/3|0)%ARP_CYC.length],sn2=si2===3?ch.r+36:ch.r+24+ch.t[si2];playSSG('B3',sn2,t,stepDur*0.3,0.026,+3);}
-  // ============ Chip B ここまで ============
-
-  // RHYTHM（MSM5205相当・1ch）。サビ入りのキメ：フィル4step+ブレイク2step。
-  if(!mute.rhy){
-    if(breakZone){ /* 無音 */ }
-    else if(fillZone){ drum('S',t); }
-    else if(warningZone){var wd=CORE_RHY[within];if(wd!=='-')drum(wd,t);}
-    else{ var d=rhyT[within];if(d!=='-')drum(d,t); }
-  }
-}
+function setTempo(){stepDur=60/SONGS[mode].bpm/4;} // 16分音符1つの長さ
+function schedule(stepIdx,t){scheduleSong(SONGS[mode],stepIdx,t);}
 function tick(){if(!running||AC.state!=='running')return;if(nextTime<AC.currentTime-0.2)nextTime=AC.currentTime+0.02;while(nextTime<AC.currentTime+0.18){schedule(step,nextTime);step++;nextTime+=stepDur;}}
 
 var BGM_OPN={
+  version:'v4',
   init:function(context,destination){initAudio(context,destination);},
   start:function(){
     initAudio();if(!AC)return;if(AC.state==='suspended')AC.resume();
@@ -360,18 +462,18 @@ var BGM_OPN={
   },
   stop:function(){running=false;clearInterval(timer);if(AC)allNotesOff(AC.currentTime);},
   setMode:function(m){
-    if(['stage','thermal','opening','boss','bossCore'].indexOf(m)<0)return;
+    if(!SONGS.hasOwnProperty(m))return;
     mode=m;step=0;setTempo();if(AC){allNotesOff(AC.currentTime);nextTime=AC.currentTime+0.05;}
   },
   setMute:function(group,on){mute[group]=!!on;},
   setVolume:function(v){if(master)master.gain.setValueAtTime(Math.max(0,Math.min(1,v)),AC.currentTime);},
-  getMode:function(){return mode;}
+  getMode:function(){return mode;},
+  songInfo:function(m){var S=SONGS[m];return S?{name:S.name,bpm:S.bpm,bars:S.chords.length,roles:S.roles,seconds:S.len*60/S.bpm/4}:null;}
 };
 window.BGM_OPN=BGM_OPN;
-
 })();
 
-// ABYSS LINE / Project 87 v12 - integrated OPN music
+// ABYSS LINE / Project 87 combined v4 — game
 (function(){
 'use strict';
 // ---------- basic setup ----------
@@ -384,9 +486,12 @@ function resize(){
   dpr=1;
   var vw=window.innerWidth,vh=window.innerHeight;
   scale=Math.min(vw/W,vh/H);
-  safeL=safePx('paddingLeft')/scale;safeR=safePx('paddingRight')/scale;
-  safeT=safePx('paddingTop')/scale;safeB=safePx('paddingBottom')/scale;
   ox=(vw-W*scale)/2;oy=(vh-H*scale)/2;
+  // セーフエリア（ノッチ・角丸・ホームバー）は、ゲーム画面に実際にかぶっている分だけを避ける。
+  // 以前は画面がレターボックスで中央にあってもインセットを丸ごと引いていたため、縦持ちなどで
+  // 上下の移動範囲が大きく削られていた（約100ドット）。
+  safeL=Math.max(0,safePx('paddingLeft')-ox)/scale;safeR=Math.max(0,safePx('paddingRight')-(vw-ox-W*scale))/scale;
+  safeT=Math.max(0,safePx('paddingTop')-oy)/scale;safeB=Math.max(0,safePx('paddingBottom')-(vh-oy-H*scale))/scale;
   cv.width=W;cv.height=H;
   cv.style.width=(W*scale)+'px';cv.style.height=(H*scale)+'px';
   cv.style.left=ox+'px';cv.style.top=oy+'px';
@@ -431,7 +536,10 @@ var SFX={
 var introT=0,musicMode=null;
 function zoneEven(){return (stage%2)===0;}
 function zoneName(){return zoneEven()?'ZONE '+stage+' THERMAL':'ZONE '+stage+' TRENCH';}
-function pal(){return zoneEven()?{deep:'#f00',mid:'#f0f',hi:'#ff0',land:'#f00'}:{deep:'#00f',mid:'#0ff',hi:'#0ff',land:'#00f'};}
+// パレットは2つだけ：TRENCH=青、THERMAL=赤。HUDの「TRN/THM」と色が必ず一致する
+function pal(){
+  return zoneEven()?{deep:'#f00',mid:'#f0f',hi:'#ff0',land:'#f00'}:{deep:'#00f',mid:'#0ff',hi:'#0ff',land:'#00f'};
+}
 function bgmTick(){
   if(!AC)return;
   var desired=null;
@@ -502,7 +610,7 @@ function startFromInput(){
 }
 function newGame(){
   score=0;lives=3;power=0;shield=0;stage=1;time=0;scroll=0;powerUpCalloutsLeft=3;
-  resetField();state='play';introT=172;musicMode=null;bgmTick();
+  resetField();state='play';introT=343;musicMode=null;bgmTick(); // LAUNCH 4小節(BPM168)=5.71秒＝343tick。曲と一体なので動かさない
   say('LAUNCH');
 }
 function resetField(){
@@ -551,8 +659,9 @@ function scheduleZone1(Q,d){
   Q(1850,function(){spawnEnemy('turret',W+30,22,{path:'ceil'});});
   for(i=0;i<10;i++)(function(i){Q(1900+i*10,function(){var yy=i%2?150:50;spawnEnemy('drone',W+30,yy,{path:'sine',ph:i,sp:4*d,by:yy,amp:24});});})(i);
   for(i=0;i<4;i++)(function(i){Q(2250+i*30,function(){spawnEnemy('ray',W+30,rnd(34,H-34),{path:'dash',sp:2.4*d});});})(i);
-  Q(2500,function(){say('WARNING');SFX.warn();});
-  Q(2680,function(){spawnBoss();});
+  // ゾーン曲32小節(BPM152)=50.53秒。2653=44.22秒＝最後の4小節(KKRR)の頭、3032=ループの拍。動かさない
+  Q(2653,function(){say('WARNING');SFX.warn();});
+  Q(3032,function(){spawnBoss();});
 }
 function scheduleZone2(Q,d){
   var i;
@@ -609,8 +718,9 @@ function scheduleZone2(Q,d){
       spawnEnemy('ray',W+30,H-34-i*8,{path:'dash',sp:2.6*d});
     });
   })(i);
-  Q(2500,function(){say('WARNING');SFX.warn();});
-  Q(2680,function(){spawnBoss();});
+  // ゾーン曲32小節(BPM152)=50.53秒。2653=44.22秒＝最後の4小節(KKRR)の頭、3032=ループの拍。動かさない
+  Q(2653,function(){say('WARNING');SFX.warn();});
+  Q(3032,function(){spawnBoss();});
 }
 function enemyUpdate(e){
   e.t++;var p=e.path,sp=e.sp||3;
@@ -658,22 +768,128 @@ function enemyDraw(e){
 // ---------- boss: 深海要塞コア ----------
 function spawnBoss(){
   var hp=Math.round((260+stage*80)*(1+power*BOSS_HP_PER_POWER));
-  boss={x:W+100,y:H/2,t:0,hp:hp,max:hp,r:28,phase:0,arms:[],flash:0,dead:false,dying:0};
-  var i;for(i=0;i<4;i++)boss.arms.push({a:i*1.5708,hp:30+stage*8,r:7,dead:false,len:36});
+  boss={x:W+100,y:H/2,t:0,hp:hp,max:hp,r:28,phase:'approach',phaseT:0,cycle:0,roamT:140,telegraph:0,chargeTx:0,chargeTy:0,flankNewY:H/2,arms:[],flash:0,dead:false,dying:0};
+  var i;for(i=0;i<4;i++)boss.arms.push({a:i*1.5708,hp:30+stage*8,r:7,dead:false,len:0,lunge:0});
   bgmTick();
 }
+// BOSS PHASE VARIETY PROTOTYPE: shared arm-position writer, reused by every angle-based phase
+// below so A.px/A.py/A.x/A.y/A.isBossArm (read elsewhere for boomerang targeting + bullet
+// collision) stay correct. split/merge below set A.px/A.py directly instead (see comments).
+function armPos(b,A){A.px=b.x+Math.cos(A.a)*A.len;A.py=b.y+Math.sin(A.a)*A.len;A.x=A.px;A.y=A.py;A.isBossArm=true;}
 function bossUpdate(b){
   b.t++;
   if(b.dying){b.dying++;if(b.dying%6===0){burst(b.x+rnd(-70,70),b.y+rnd(-70,70),14,'#ff0',5,40);SFX.boom();shake=8;}
     if(b.dying>150){SFX.bigboom();flash=20;burst(b.x,b.y,120,'#fff',9,70);score+=5000*stage;b.dead=true;stageClear();}return;}
-  if(b.x>W-105)b.x-=1.2;else{b.y=H/2+Math.sin(b.t*0.012)*25;b.x=W-105+Math.cos(b.t*0.02)*14;}
   var alive=0,i;for(i=0;i<4;i++)if(!b.arms[i].dead)alive++;
-  var rot=0.012+(4-alive)*0.006;
-  for(i=0;i<4;i++){var A=b.arms[i];A.a+=rot;A.px=b.x+Math.cos(A.a)*A.len;A.py=b.y+Math.sin(A.a)*A.len;A.x=A.px;A.y=A.py;A.isBossArm=true;
-    if(!A.dead&&b.t%55===i*13&&b.x<W-100)eshot(A.px,A.py,aimAt(A.px,A.py),3.5,1);}
-  if(b.x<W-120){
-    if(alive===0){ if(b.t%18===0){var a=b.t*0.13,j;for(j=0;j<3;j++)eshot(b.x,b.y,a+j*2.094,3,2);} if(b.t%120===0){var k;for(k=-3;k<=3;k++)eshot(b.x,b.y,aimAt(b.x,b.y)+k*0.12,4.5);} }
-    else if(b.t%90===0){var m;for(m=0;m<12;m++)eshot(b.x,b.y,m*0.5236+b.t*0.01,2.4,2);}
+  // once every arm is down, force a one-time transition into the dedicated 'core' finale phase
+  // (reuses the old alive===0 firing pattern below, just makes the moment read as a phase change)
+  if(alive===0&&b.phase!=='core'&&b.phase!=='approach'&&b.phase!=='deploy'){
+    b.phase='core';b.phaseT=0;shake=Math.max(shake,10);flash=Math.max(flash,8);burst(b.x,b.y,40,'#f00',6,40);SFX.boom();
+  }
+  b.phaseT++;
+  if(b.phase==='approach'){
+    if(b.x>W-105){b.x-=1.2;}else{b.x=W-105;b.phase='deploy';b.phaseT=0;}
+    b.y=H/2;
+    for(i=0;i<4;i++)armPos(b,b.arms[i]);
+    return;
+  }
+  if(b.phase==='deploy'){
+    var dp=Math.min(1,b.phaseT/40);
+    for(i=0;i<4;i++){var Ad=b.arms[i];Ad.a+=0.05;Ad.len=36*dp;armPos(b,Ad);}
+    if(b.phaseT>=40){for(i=0;i<4;i++)b.arms[i].len=36;SFX.hit();burst(b.x,b.y,20,'#0ff',5,30);b.phase='rotate';b.phaseT=0;b.roamT=rnd(110,170);}
+    return;
+  }
+  if(b.phase==='rotate'){
+    b.y=H/2+Math.sin(b.t*0.012)*25;b.x=W-105+Math.cos(b.t*0.02)*14;
+    var rot=0.012+(4-alive)*0.006;
+    for(i=0;i<4;i++){var A=b.arms[i];A.a+=rot;
+      if(A.lunge>0)A.lunge--;
+      A.len=36+(A.lunge>0?Math.sin(A.lunge/8*3.14159)*10:0);
+      armPos(b,A);
+      if(!A.dead&&b.t%55===i*13&&b.x<W-100){eshot(A.px,A.py,aimAt(A.px,A.py),3.5,1);A.lunge=8;A.flash=4;}
+    }
+    if(b.phaseT>=b.roamT){
+      b.cycle=(b.cycle||0)+1;
+      // BOSS SPLIT/MERGE PROTOTYPE: 1-in-4 cycles detaches the arms instead of charge/flank
+      var pick=b.cycle%4;
+      b.phase=pick===0?'flank':(pick===2?'split':'charge');b.phaseT=0;
+      if(b.phase==='charge'){b.chargeTx=Math.max(player.x+70,160);b.chargeTy=player.y;b.telegraph=20;}
+      else if(b.phase==='flank'){b.flankNewY=player.y<H/2?H-50:50;}
+    }
+    return;
+  }
+  if(b.phase==='charge'){
+    for(i=0;i<4;i++){var A2=b.arms[i];A2.a+=0.03;armPos(b,A2);}
+    if(b.telegraph>0){b.telegraph--;return;}
+    if(b.phaseT<36){
+      var dx=b.chargeTx-b.x,dy=b.chargeTy-b.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+      b.x+=dx/d*Math.min(9,d);b.y+=dy/d*Math.min(9,d);
+      if(b.phaseT===18&&b.x<W-60){var a0=aimAt(b.x,b.y),j;for(j=-2;j<=2;j++)eshot(b.x,b.y,a0+j*0.15,5);}
+    }else{
+      var hx=W-105,hy=H/2,dx2=hx-b.x,dy2=hy-b.y,d2=Math.sqrt(dx2*dx2+dy2*dy2)||1;
+      if(d2>4){b.x+=dx2/d2*6;b.y+=dy2/d2*6;}
+      else{b.phase='rotate';b.phaseT=0;b.roamT=rnd(110,170);}
+    }
+    return;
+  }
+  if(b.phase==='flank'){
+    for(i=0;i<4;i++){var A3=b.arms[i];A3.a+=0.02;armPos(b,A3);}
+    if(b.phaseT<18){
+      b.x+=5;
+      if(b.phaseT===17){burst(b.x,b.y,30,'#0ff',5,30);SFX.boom();}
+    }else if(b.phaseT===19){
+      b.x=W+60;b.y=b.flankNewY;
+    }else if(b.phaseT<45){
+      b.x-=5.5;
+    }else{
+      b.x=W-105;b.phase='rotate';b.phaseT=0;b.roamT=rnd(100,150);burst(b.x,b.y,20,'#fff',5,30);SFX.hit();
+    }
+    return;
+  }
+  if(b.phase==='split'){
+    // BOSS SPLIT/MERGE PROTOTYPE: arms stop orbiting and spread into a loose diamond around
+    // the core, each firing independently, then re-converge in the 'merge' phase below. The
+    // core itself (b.x/b.y) holds still as the anchor the tether lines are drawn to, so
+    // bossDraw()'s existing core<->arm line needs no changes at all.
+    if(b.phaseT===1){
+      var R=90,offs=[[0,-R],[R,0],[0,R],[-R,0]];
+      for(i=0;i<4;i++){var As=b.arms[i];As.splitTx=b.x+offs[i][0];As.splitTy=Math.max(20,Math.min(H-20,b.y+offs[i][1]));As.sx=As.px;As.sy=As.py;}
+    }
+    var moveT=Math.min(1,b.phaseT/30);
+    for(i=0;i<4;i++){
+      var As2=b.arms[i];if(As2.dead)continue;
+      if(b.phaseT<=30){As2.px=As2.sx+(As2.splitTx-As2.sx)*moveT;As2.py=As2.sy+(As2.splitTy-As2.sy)*moveT;}
+      else{
+        As2.px=As2.splitTx+Math.sin(b.t*0.05+i)*6;As2.py=As2.splitTy+Math.cos(b.t*0.04+i)*6;
+        if(b.t%45===i*11)eshot(As2.px,As2.py,aimAt(As2.px,As2.py),4,1);
+      }
+      As2.x=As2.px;As2.y=As2.py;As2.isBossArm=true;
+    }
+    if(b.phaseT>=100){b.phase='merge';b.phaseT=0;for(i=0;i<4;i++){var Am=b.arms[i];Am.mx=Am.px;Am.my=Am.py;}}
+    return;
+  }
+  if(b.phase==='merge'){
+    var mt=Math.min(1,b.phaseT/26);
+    for(i=0;i<4;i++){
+      var Am2=b.arms[i];if(Am2.dead)continue;
+      Am2.px=Am2.mx+(b.x-Am2.mx)*mt+Math.cos(Am2.a)*Am2.len*mt;
+      Am2.py=Am2.my+(b.y-Am2.my)*mt+Math.sin(Am2.a)*Am2.len*mt;
+      Am2.x=Am2.px;Am2.y=Am2.py;Am2.isBossArm=true;
+    }
+    if(b.phaseT>=26){
+      for(i=0;i<4;i++)armPos(b,b.arms[i]);
+      SFX.hit();burst(b.x,b.y,24,'#0ff',5,30);shake=Math.max(shake,5);
+      b.phase='rotate';b.phaseT=0;b.roamT=rnd(110,170);
+    }
+    return;
+  }
+  if(b.phase==='core'){
+    b.x+=(W-105-b.x)*0.05;b.y+=(H/2-b.y)*0.05;
+    for(i=0;i<4;i++){var A4=b.arms[i];if(!A4.dead)continue;A4.a+=0.01;armPos(b,A4);}
+    var esc=1-b.hp/b.max;
+    if(b.t%Math.max(8,Math.round(18-esc*8))===0){var a=b.t*0.13,jj;for(jj=0;jj<3;jj++)eshot(b.x,b.y,a+jj*2.094,3,2);}
+    if(b.t%Math.max(50,Math.round(120-esc*50))===0){var k=-3;for(k=-3;k<=3;k++)eshot(b.x,b.y,aimAt(b.x,b.y)+k*0.12,4.5);}
+    return;
   }
 }
 function bossDraw(b){
@@ -685,6 +901,8 @@ function bossDraw(b){
     if(!A.dead){cx.fillStyle=A.flash?'#fff':'#ff0';cx.beginPath();cx.arc(A.px,A.py,A.r,0,6.283);cx.fill();cx.fillStyle='#f00';cx.fillRect(A.px-2,A.py-2,4,4);}
     else{cx.fillStyle='#00f';cx.beginPath();cx.arc(A.px,A.py,5,0,6.283);cx.fill();}
   }
+  // BOSS PHASE VARIETY PROTOTYPE: telegraph ring before a charge, so the lunge is readable/avoidable
+  if(b.phase==='charge'&&b.telegraph>0&&b.telegraph%4<2){cx.strokeStyle='#fff';cx.lineWidth=2;cx.beginPath();cx.arc(b.x,b.y,b.r+8,0,6.283);cx.stroke();}
   cx.save();cx.translate(b.x,b.y);
   cx.rotate(b.t*0.01);cx.strokeStyle='#0ff';cx.lineWidth=5;cx.setLineDash([13,7]);cx.beginPath();cx.arc(0,0,38,0,6.283);cx.stroke();
   cx.rotate(-b.t*0.025);cx.strokeStyle='#00f';cx.lineWidth=3;cx.setLineDash([6,5]);cx.beginPath();cx.arc(0,0,32,0,6.283);cx.stroke();cx.setLineDash([]);
@@ -694,6 +912,11 @@ function bossDraw(b){
   cx.restore();
   cx.fillStyle='#000';cx.fillRect(W/2-100,7,200,5);cx.fillStyle=exposed?'#fff':'#0ff';cx.fillRect(W/2-100,7,200*b.hp/b.max,5);
 }
+window.BOSS_PHASE_DEBUG_SPAWN=function(){enemies.length=0;spawnBoss();}; // console/test hook only
+window.BOSS_PHASE_DEBUG_STATE=function(){return {phase:boss&&boss.phase,phaseT:boss&&boss.phaseT,bx:boss&&Math.round(boss.x),by:boss&&Math.round(boss.y),hp:boss&&boss.hp,armsAlive:boss?boss.arms.filter(function(a){return !a.dead;}).length:0,armLens:boss?boss.arms.map(function(a){return Math.round(a.len);}):null,armPos:boss?boss.arms.map(function(a){return {x:Math.round(a.px),y:Math.round(a.py)};}):null,cycle:boss&&boss.cycle,dying:boss&&!!boss.dying};}; // console/test hook only
+window.BOSS_PHASE_DEBUG_KILL_ARMS=function(){if(boss)boss.arms.forEach(function(a){a.dead=true;});}; // console/test hook only
+window.BOSS_PHASE_DEBUG_ZERO_HP=function(){if(boss)boss.hp=0;}; // console/test hook only
+window.BOSS_PHASE_DEBUG_FORCE_SPLIT=function(){if(boss){boss.phase='rotate';boss.phaseT=9999;boss.roamT=0;boss.cycle=1;}}; // console/test hook only: forces the NEXT rotate->transition to resolve as 'split' (cycle%4===2 path requires cycle=2, so this nudges cycle to 1 then lets the normal increment land on 2)
 function stageClear(){
   stage++;saveHI();say(zoneName());waveT=0;scheduleWaves();
 }
@@ -849,6 +1072,7 @@ function update(){
   if(state!=='play'){if(state==='over')deadT++;scroll+=0.7;parts.forEach(pUpd);if(shake>0)shake--;if(flash>0)flash--;if(shieldFlash>0)shieldFlash--;if(msgT>0)msgT--;return;}
   if(introT>0){introT--;playerUpdate();bullets.length=0;scroll+=2;if(msgT>0)msgT--;if(introT===0){invul=120;say(zoneName());}bgmTick();return;}
   scroll+=2;
+  bgPhaseUpdate();
   if(spawnQ.length===0&&!boss&&enemies.length===0)scheduleWaves();
   waveT++;
   var i;
@@ -905,12 +1129,26 @@ function pUpd(p){p.x+=p.vx;p.y+=p.vy;p.vx*=0.96;p.vy*=0.96;p.life--;}
 // ---------- background ----------
 var bg=[],i0;for(i0=0;i0<40;i0++)bg.push({x:rnd(0,W),y:rnd(0,H),z:rnd(0.2,1)});
 var seabed=[];for(i0=0;i0<60;i0++)seabed.push(rnd(20,70));
+// 背景：通常面は常に静か（天気の循環はしない）。ボスのコア露出中だけ、最大400tick（約6.7秒）
+// 上下の縁に単色の濁りが1秒周期でゆっくり呼吸する。白の点滅は使わない。
+var bgPhase='calm',starDrift=0,bgCoreForceT=0,bgStormT=0;
+function bgPhaseUpdate(){
+  if(boss&&boss.phase==='core'){bgCoreForceT++;}else{bgCoreForceT=0;}
+  var storm=bgCoreForceT>0&&bgCoreForceT<=400;
+  if(storm){if(bgPhase!=='storm'){bgPhase='storm';bgStormT=0;}bgStormT++;}else bgPhase='calm';
+  starDrift+=storm?0.75:1.5;
+}
+function bgPhaseOverlay(P){
+  if(bgPhase!=='storm')return;
+  var cyc=bgStormT%60,breathe=cyc<30?cyc/30:(60-cyc)/30,step=6-Math.round(breathe*3);
+  dither(0,0,W,36,step,P.deep);dither(0,H-36,W,36,step,P.deep);
+}
 function drawBG(){
   var P=pal(),i;
   cx.fillStyle='#000';cx.fillRect(0,0,W,H);
   for(i=0;i<H;i+=8)dither(0,i,W,3,2,P.deep);
   for(i=0;i<4;i++){var sx=((i*190-scroll*0.15)%(W+220)+W+220)%(W+220)-100;for(var q=0;q<42;q+=8)dither(sx+q,0,3,H,2,P.mid);}
-  for(i=0;i<bg.length;i++){var b=bg[i];var x=((b.x-scroll*b.z)%W+W)%W,y=(b.y-time*0.3*b.z+H)%H;cx.fillStyle=b.z>0.7?P.hi:P.deep;cx.fillRect(Math.round(x),Math.round(y),b.z>0.7?2:1,b.z>0.7?2:1);}
+  for(i=0;i<bg.length;i++){var b=bg[i];var x=((b.x-scroll*b.z)%W+W)%W,y=(b.y-starDrift*b.z+H)%H;cx.fillStyle=b.z>0.7?P.hi:P.deep;cx.fillRect(Math.round(x),Math.round(y),b.z>0.7?2:1,b.z>0.7?2:1);}
   cx.strokeStyle=P.deep;cx.lineWidth=2;
   if(zoneEven()){
     for(i=0;i<7;i++){var vx=((i*110-scroll*0.7)%(W+140)+W+140)%(W+140)-70;cx.beginPath();cx.moveTo(vx,H);cx.lineTo(vx+8,H-38-Math.sin((scroll+i)*0.03)*10);cx.lineTo(vx+16,H);cx.stroke();}
@@ -924,7 +1162,9 @@ function drawBG(){
   for(i=0;i<=60;i++){var px2=i*(W+40)/60-(scroll*1.3%((W+40)/60*2)),idx2=(i*7+Math.floor(scroll*1.3/((W+40)/60)))%60;cx.lineTo(px2,seabed[idx2<0?idx2+60:idx2]*(zoneEven()?0.62:0.5));}
   cx.lineTo(W+40,0);cx.closePath();cx.fill();
   dither(0,H-72,W,72,2,'#000');dither(0,0,W,36,2,'#000');
+  bgPhaseOverlay(P);
 }
+window.BG_PHASE_DEBUG_STATE=function(){return {bgPhase:bgPhase,starDrift:Math.round(starDrift),bossPhase:boss&&boss.phase,bgCoreForceT:bgCoreForceT};}; // console/test hook only
 
 // ---------- draw ----------
 function draw(){
@@ -961,7 +1201,7 @@ function draw(){
     dither(0,H/2-58,W,120,2,'#000');cx.fillStyle='#000';cx.fillRect(W/2-210,H/2-52,420,104);
     cx.textAlign='center';cx.textBaseline='middle';
     if(state==='title'){cx.fillStyle='#0ff';cx.font='bold 34px "Courier New",monospace';cx.fillText('ABYSS LINE',W/2,H/2-34);
-      cx.fillStyle='#fff';cx.font='10px "Courier New",monospace';cx.fillText('PROJECT 87 / PANORAMA CONVERSION  V12',W/2,H/2-6);cx.fillText('DRAG OR CURSOR KEYS / AUTO FIRE',W/2,H/2+16);
+      cx.fillStyle='#fff';cx.font='10px "Courier New",monospace';cx.fillText('PROJECT 87 / PANORAMA CONVERSION  V4',W/2,H/2-6);cx.fillText('DRAG OR CURSOR KEYS / AUTO FIRE',W/2,H/2+16);
       cx.fillStyle='#0ff';if((time>>4)%2===0)cx.fillText('TOUCH TO START',W/2,H/2+40);}
     else{cx.fillStyle='#f00';cx.font='bold 28px "Courier New",monospace';cx.fillText('GAME OVER',W/2,H/2-24);
       cx.fillStyle='#fff';cx.font='10px "Courier New",monospace';cx.fillText('SCORE '+pad(score)+'   ZONE '+stage,W/2,H/2+8);

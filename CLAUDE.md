@@ -58,3 +58,7 @@ Phase C checklist used so far (repeat for any future device-testing round):
 ## Development workflow
 
 No build/lint/test tooling. `node --check script.js` catches syntax errors. No unit tests exist; validate by loading `index.html` in a browser (or headless Chromium) and playing through the Phase C checklist. Real iOS Safari-specific behavior (background/foreground audio, touch, safe-area insets) cannot be verified headlessly — needs an actual device.
+
+## 2026-10-17: live build replaced with combined v4
+
+`index.html` + `script.js` on this branch now hold **combined v4** (combined_v3_proto + BGM v4, 5 songs: LAUNCH / HADAL ZONE / BLACK SMOKER / IRON LEVIATHAN / ABYSSAL HEART), supplied by the developer as the latest version. Split from the single-file `abyss_line_combined_v4_bgm.html` the same way as v13 (re-inlining `script.js` reproduces the original byte-for-byte). All v13 commits on this branch (GAME OVER shake fix, WARNING SFX / core bar contrast, bullet outlines, POWER UP callout, Phase D-2A) were checked line-by-line and are already contained in combined v4.
