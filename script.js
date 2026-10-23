@@ -978,29 +978,37 @@ function drawBoomerangs(){
 }
 
 // ---------- player ----------
-var PLAYER_PAL=[null,'#fff','#0ff','#00f','#ff0','#f00'];
+var PLAYER_PAL=[null,'#fff','#0ff','#00f','#ff0','#f00','#f0f','#000'];
+// 30x19 hybrid-nozzle ship, drawn from the hand sketches: tilted egg cockpit split by a diagonal (glass above, body below), sitting above the body axis on purpose
 var PLAYER_PAT=[
-'000000000000000000000000',
-'001111111111111111000000',
-'001111133333111111111000',
-'001111111111111111111110',
-'000000000011111100000000',
-'000000000011221100000000',
-'000000000011221100000000',
-'000000000011111100000000',
-'001111111111111111111110',
-'001111133333111111111000',
-'001111111111111111000000',
-'000000000000000000000000'
+'000007000000000007777700000000',
+'000007700000000771112177700000',
+'000007577000007551222222270000',
+'000007155700071115522222227700',
+'000007111570071111152222222270',
+'000007111157071111115522222227',
+'000007111115772111111155222227',
+'077771111331532211111111522227',
+'736361113253113221111111155227',
+'736361553553553322121212122570',
+'736362223523225777222222277700',
+'077772222332557000777777700000',
+'000007222225770000000000000000',
+'000007222257000000000000000000',
+'000007222570000000000000000000',
+'000007255700000000000000000000',
+'000007577000000000000000000000',
+'000007700000000000000000000000',
+'000007000000000000000000000000'
 ].map(function(r){return r.split('').map(Number);});
 var PLAYER_FLAME=[
-  [[0,2,4],[1,2,4],[0,9,4],[1,9,4]],
-  [[0,2,5],[1,1,4],[0,9,5],[1,10,4]]
+  [[1,8,4],[0,9,4],[1,9,5],[1,10,4]],
+  [[1,8,5],[0,9,5],[-1,9,4],[1,9,4],[1,10,5]]
 ];
 var PLAYER_CV=(function(){
-  var c=document.createElement('canvas');c.width=24;c.height=12;
+  var c=document.createElement('canvas');c.width=30;c.height=19;
   var g=c.getContext('2d'),j,i,v;
-  for(j=0;j<12;j++)for(i=0;i<24;i++){v=PLAYER_PAT[j][i];if(!v)continue;g.fillStyle=PLAYER_PAL[v];g.fillRect(i,j,1,1);}
+  for(j=0;j<19;j++)for(i=0;i<30;i++){v=PLAYER_PAT[j][i];if(!v)continue;g.fillStyle=PLAYER_PAL[v];g.fillRect(i,j,1,1);}
   return c;
 })();
 
@@ -1010,7 +1018,7 @@ function playerUpdate(){
   if(keys[37]||keys[65])ax-=1;if(keys[39]||keys[68])ax+=1;if(keys[38]||keys[87])ay-=1;if(keys[40]||keys[83])ay+=1;
   var sp=5.2;player.x+=ax*sp;player.y+=ay*sp;
   if(touch.active){var mx=Math.max(-14,Math.min(14,touch.mx)),my=Math.max(-14,Math.min(14,touch.my));player.x+=mx;player.y+=my;touch.mx-=mx;touch.my-=my;ay=ay||my/14;}
-  player.x=Math.max(14+safeL,Math.min(W-18-safeR,player.x));player.y=Math.max(8+safeT,Math.min(H-8-safeB,player.y));
+  player.x=Math.max(15+safeL,Math.min(W-18-safeR,player.x));player.y=Math.max(10+safeT,Math.min(H-10-safeB,player.y));
   player.tilt=ay;
   if(invul>0)invul--;
   fireT++;var rate=power>=3?6:8;
@@ -1027,16 +1035,16 @@ function playerUpdate(){
 }
 function playerDraw(){
   if(invul>0&&(invul>>2)%2===0)return;
-  var x=Math.round(player.x)-12,y=Math.round(player.y)-6,bank=0;
+  var x=Math.round(player.x)-15,y=Math.round(player.y)-9,bank=0;
   if(player.tilt<-0.2)bank=-1;else if(player.tilt>0.2)bank=1;
   if(bank===0)cx.drawImage(PLAYER_CV,x,y);
   else{
-    cx.drawImage(PLAYER_CV,0,0,12,12,x,y,12,12);
-    cx.drawImage(PLAYER_CV,12,0,12,12,x+12,y+bank,12,12);
+    cx.drawImage(PLAYER_CV,0,0,15,19,x,y,15,19);
+    cx.drawImage(PLAYER_CV,15,0,15,19,x+15,y+bank,15,19);
   }
   var fl=PLAYER_FLAME[(time>>2)%2],k;
   for(k=0;k<fl.length;k++){cx.fillStyle=PLAYER_PAL[fl[k][2]];cx.fillRect(x-2+fl[k][0],y+fl[k][1],1,1);}
-  if(fireT===0){cx.fillStyle='#fff';cx.fillRect(x+22,y+3,2,1);cx.fillRect(x+22,y+8,2,1);}
+  if(fireT===0){cx.fillStyle='#fff';cx.fillRect(x+27,y+6,2,1);cx.fillRect(x+27,y+12,2,1);}
   if(shield>0){var i,a,boost=shieldFlash?shieldFlash*0.35:0;
     cx.fillStyle=(time>>2)%2?'#0ff':'#fff';
     for(i=0;i<16;i++){a=i*0.3927+time*0.035;cx.fillRect(Math.round(player.x+Math.cos(a)*(17+boost)),Math.round(player.y+Math.sin(a)*(10+boost*0.5)),1,1);}

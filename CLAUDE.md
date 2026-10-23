@@ -62,3 +62,7 @@ No build/lint/test tooling. `node --check script.js` catches syntax errors. No u
 ## 2026-10-17: live build replaced with combined v4
 
 `index.html` + `script.js` on this branch now hold **combined v4** (combined_v3_proto + BGM v4, 5 songs: LAUNCH / HADAL ZONE / BLACK SMOKER / IRON LEVIATHAN / ABYSSAL HEART), supplied by the developer as the latest version. Split from the single-file `abyss_line_combined_v4_bgm.html` the same way as v13 (re-inlining `script.js` reproduces the original byte-for-byte). All v13 commits on this branch (GAME OVER shake fix, WARNING SFX / core bar contrast, bullet outlines, POWER UP callout, Phase D-2A) were checked line-by-line and are already contained in combined v4.
+
+## 2026-10-24: live build updated to combined v4 ship3
+
+`script.js` now holds **combined v4 ship3** (`abyss_line_combined_v4_ship3.js` from Dropbox, the developer's latest). The only change from the previous live build is the player ship: a 30×19 hybrid-nozzle sprite drawn from the developer's hand sketches (`PLAYER_PAL` gains `#f0f`/`#000`), with the matching screen clamp, draw offsets, nozzle flame anchors and muzzle-flash position. `index.html` is unchanged.
